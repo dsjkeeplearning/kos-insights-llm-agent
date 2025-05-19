@@ -1,0 +1,11 @@
+crewai
+tiktoken
+openai
+python-dotenv
+flask
+langchain-openai
+qdrant-client 
+crewai_tools 
+pdfplumber 
+transformers
+torch
