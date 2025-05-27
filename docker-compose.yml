@@ -1,6 +1,6 @@
 services:
   llm-agent:
-    image: deployment.keeplearningos.com:5000/insights/llm-agent:latest
+    image: llm-agent:latest
     container_name: insights-llm-agent
     ports:
       - "5000:5000"
