@@ -1,11 +1,5 @@
-torch
 crewai
-tiktoken
-openai
-python-dotenv
 flask
 langchain-openai
-crewai_tools
-#qdrant-client 
-#pdfplumber 
-#transformers
+crewai_tools 
+sentence-transformers
