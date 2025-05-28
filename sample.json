@@ -1,0 +1,93 @@
+{
+  "lead_field_values": [
+    {
+      "lead_template_field_id": "7a2e49cb-8e4c-401c-bbc6-8cff076d7d0e",
+      "field": "name",
+      "value": "Ananya Sharma"
+    },
+    {
+      "lead_template_field_id": "1169c5d7-4d55-49f2-8f12-4367abe9569c",
+      "field": "email",
+      "value": "ananya.sharma@example.com"
+    },
+    {
+      "lead_template_field_id": "d36511e4-a082-40ae-b20c-d6dabee67bd0",
+      "field": "mobile_number",
+      "value": "9876543210"
+    }
+  ],
+  "reference_id": "127162987",
+  "lead_id": "90127",
+  "institute_id": 1,
+  "lead_score": 25,
+  "message": {
+    "channel": "WHATSAPP",
+    "direction": "INBOUND",
+    "sub_activity": null,
+    "timestamp": "2025-05-16T10:35:00+05:30",
+    "message": "what's the fees for mba? also, i am from bangalore.",
+    "conversation_id": "123456789",
+    "meta": "{}",
+    "note": "note here"
+  },
+  "communication_log": [
+    {
+      "channel": "WHATSAPP",
+      "direction": "INBOUND",
+      "sub_activity": null,
+      "timestamp": "2025-05-15T10:35:00+05:30",
+      "message": "hi",
+      "conversation_id": "123456789",
+      "meta": "{}",
+      "note": "note here"
+    },
+    {
+      "channel": "WHATSAPP",
+      "direction": "OUTBOUND",
+      "sub_activity": null,
+      "timestamp": "2025-05-15T10:34:00+05:30",
+      "message": "Welcome!",
+      "conversation_id": "123456789",
+      "meta": "{}",
+      "note": "High engagement in short timeframe via WhatsApp and email. Clicked brochure link, indicating strong interest."
+    },
+    {
+      "channel": "email",
+      "direction": "INBOUND",
+      "sub_activity": "LINK_CLICK",
+      "timestamp": "2025-05-15T11:00:00+05:30",
+      "message": "https://bit.ly/4g3cTUF",
+      "meta": "{}",
+      "note": ""
+    },
+    {
+      "channel": "CALL",
+      "direction": "OUTBOUND",
+      "sub_activity": null,
+      "timestamp": "2025-05-15T11:00:00+05:30",
+      "message": "Called the lead at",
+      "meta": "{}",
+      "note": ""
+    }
+  ],
+  "template_fields": [
+    {
+      "lead_template_field_id": "id-platform",
+      "field": "platform",
+      "value": "",
+      "fieldType": "TEXT"
+    },
+    {
+      "lead_template_field_id": "id-registration-date",
+      "field": "Registration Date",
+      "value": "",
+      "fieldType": "TEXT"
+    },
+    {
+      "lead_template_field_id": "id-location",
+      "field": "location",
+      "value": "",
+      "fieldType": "TEXT"
+    }
+  ]
+}
