@@ -3,3 +3,6 @@ flask
 langchain-openai
 crewai_tools 
 sentence-transformers
+whisperx
+requests
+uuid
