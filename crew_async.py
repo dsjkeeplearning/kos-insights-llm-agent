@@ -1,4 +1,6 @@
 import requests
+from crew import run_qualification_agent
+
 def process_qualification_async(webhook_url, data):
     """
     Background function to process lead qualification asynchronously.
