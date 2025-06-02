@@ -191,7 +191,7 @@ def run_qualification_agent(input_json: dict) -> dict:
         -   Determine the most appropriate `channel` for response (recent inbound, WhatsApp 24hr rule).
         -   Determine `scheduled_time` adhering to IST business hours for calls, or smart timing for messages based on current time and previous history.
         -   Craft the `content` of your response, incorporating factual answers, qualification questions, or general engagement.
-    
+        -   `lead_id` and `reference_id` of output json should match the respective field from the input json.
         -   Return the "note" field as a list of four strings in this order: (1) rationale behind the lead score updation (how much you increased/decreased and why), (2) details of updated lead fields (3) summary of the current interaction and communication logs, (4) explanation of the whole reasoning process by the agent (This is your thought process).
 
         **Always return a well-formed JSON object as the final output.**
