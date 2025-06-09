@@ -1,8 +1,11 @@
-crewai
 flask
+pytz
+langchain-core
 langchain-openai
-crewai_tools 
-sentence-transformers
+langgraph
+python-dotenv
+langchain-qdrant
+langchain-huggingface
 whisperx
 requests
 uuid
