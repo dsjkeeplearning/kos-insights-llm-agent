@@ -19,8 +19,8 @@ embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 load_dotenv()
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY").strip()
 # Corrected: removed space from environment variable name
-os.environ["QDRANT_DIVINA_API_KEY"] = os.getenv("QDRANT_DIVINA_API_KEY").strip()
-os.environ["QDRANT_DIVINA_URL"] = os.getenv("QDRANT_DIVINA_URL").strip()
+os.environ["QDRANT_API_KEY"] = os.getenv("QDRANT_API_KEY").strip()
+os.environ["QDRANT_URL"] = os.getenv("QDRANT_URL").strip()
 
 
 # Define LLM
@@ -46,8 +46,8 @@ ist_now = datetime.now(timezone('Asia/Kolkata')).strftime('%A, %B %d, %Y at %I:%
 
 # Initialize Qdrant Client
 qdrant_client = QdrantClient(
-    url=os.environ["QDRANT_DIVINA_URL"],
-    api_key=os.environ["QDRANT_DIVINA_API_KEY"]
+    url=os.environ["QDRANT_URL"],
+    api_key=os.environ["QDRANT_API_KEY"]
 )
 
 class InputValidator:
