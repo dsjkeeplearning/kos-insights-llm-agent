@@ -1,7 +1,10 @@
 services:
   llm-agent:
-    image: llm-agent:latest
     container_name: insights-llm-agent
+    image: llm-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "5000:5000"
     env_file:
