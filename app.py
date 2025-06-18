@@ -1,7 +1,7 @@
 # app.py
 #type:ignore
 from flask import Flask, request, Response, jsonify
-import json
+import json, os
 from crew import run_qualification_agent
 
 import uuid
@@ -12,6 +12,19 @@ import concurrent.futures
 
 app = Flask(__name__)
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+
+SECURITY_HEADER = "X-SECURITY-TOKEN"
+SECURITY_TOKEN = os.environ.get("SECURITY_TOKEN")
+
+if SECURITY_TOKEN is None:
+    raise RuntimeError("SECURITY_TOKEN environment variable must be set")
+
+@app.before_request
+def require_security_header():
+    token = request.headers.get(SECURITY_HEADER)
+    if token != SECURITY_TOKEN:
+        error_msg = {"error": "Unauthorized: Missing or invalid security token"}
+        return Response(json.dumps(error_msg), mimetype='application/json', status=401)
 
 @app.route("/qualify_lead", methods=["POST"])
 def qualify_lead():
