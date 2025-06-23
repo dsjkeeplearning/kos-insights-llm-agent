@@ -9,3 +9,4 @@ langchain-huggingface
 whisperx
 requests
 uuid
+sentence-transformers
