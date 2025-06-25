@@ -341,7 +341,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     current_state = state.model_copy() # Create a copy of the state
     conversation_id = state.input_json.get("message", {}).get("conversation_id", "")
     # One delay value for all scheduling testing purposes
-    TEST_DELAY_SECONDS = int(os.getenv("TEST_DELAY_SECONDS"))
+    TEST_DELAY_SECONDS = int(os.getenv("TEST_DELAY_SECONDS", 120))
     communication_logs_str = "\n".join([
     ", ".join([f"{key}: {value}" for key, value in log.items()])
     for log in current_state.input_json.get("communication_log", [])
