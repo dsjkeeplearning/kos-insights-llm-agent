@@ -112,7 +112,7 @@ class TimeUtils:
 
 import tiktoken
 
-def handle_token_overflow(payload: dict, model_name: str = "gpt-4") -> dict | None:
+def handle_token_overflow(payload: dict, model_name: str = "gpt-4o-mini") -> dict | None:
     encoding = tiktoken.encoding_for_model(model_name)
     
     # Extract core message and channel
@@ -221,7 +221,7 @@ def process_message_node(state: AgentState, max_retries: int = 3) -> AgentState:
         - `inappropriate_message`: The message contains offensive or abusive content.
         - `factual_query`: The user is asking a question that can be answered with factual information, such as about fees, eligibility criteria, specific program details, faculty, campus facilities, or admission processes.
         - `general_query`: Any other message that is a normal inquiry or interaction not covered by the above.
-        - `immediate_joining`: The user expresses a strong intent to join immediately, or indicates they are ready to become a student right away (e.g., "I want to join this program full-time now", "I'm ready to enroll").
+        - `immediate_joining`: The user expresses a strong intent to join immediately, indicates they are ready to become a student right away, or wants to fill an application form (e.g., "I want to join this program full-time now", "I'm ready to enroll").
         Provide a brief reasoning for your classification.
         """),
         ("human", "User message: {message_content}\n\nStrictly output JSON according to the schema: {schema_json}")
@@ -341,7 +341,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     current_state = state.model_copy() # Create a copy of the state
     conversation_id = state.input_json.get("message", {}).get("conversation_id", "")
     # One delay value for all scheduling testing purposes
-    TEST_DELAY_SECONDS = int(os.getenv("TEST_DELAY_SECONDS", 120))
+    TEST_DELAY_SECONDS = int(os.getenv("TEST_DELAY_SECONDS"))
     communication_logs_str = "\n".join([
     ", ".join([f"{key}: {value}" for key, value in log.items()])
     for log in current_state.input_json.get("communication_log", [])
@@ -355,21 +355,21 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     template = """
     You are an intelligent, professional LLM conversation agent working inside an Indian EdTech CRM system.
     You are the central hub for lead management. You assist the human sales team by responding
-    across WHATSAPP, EMAIL, SMS, and CALL. You help qualify leads by acquiring missing essential details
+    across WHATSAPP, EMAIL, and CALL. You help qualify leads by acquiring missing essential details
     and by intelligently probing for additional relevant information
     from existing leads to enrich their profiles and improve lead scoring.
     You are also responsible for updating missing or outdated metadata (excluding name, email, or mobile. These are fixed and cannot be updated),
     and assessing lead potential using a scoring system, *always ensuring the lead score changes with each interaction*
-    for 'general_query', 'factual_query', 'counsellor_request' intents. For 'inappropriate_message' intent, the lead score should decrease.
+    for 'general_query', 'factual_query', 'immediate_joining', 'counsellor_request' intents. For 'inappropriate_message' intent, the lead score should decrease.
     You always rely on communication logs and lead messages for insights.
     You MUST NOT send any emojis even if the user requests it or sends a message with an emoji.
-    You MUST NEVER change the lead_template_field_id for the following fields: "name", 'email", "mobile_number", "Registration Date"
+    You MUST NEVER change the lead_template_field_id for the following fields: "name", "email", "mobile_number", "Registration Date"
     You must never hallucinate information.
 
     Context Understanding and Reference Resolution:
     - From the `communication_log`, extract the last 5 most recent `INBOUND` messages (preferably from the same channel as the current message if available).
     - Use these messages to reconstruct context and resolve pronouns or ambiguous references in the current message. Examples include: "this", "that course", "it", or "fees for this program".
-    - Apply this especially for messages over channels like WhatsApp and SMS where messages tend to be short and split.
+    - Apply this especially for messages over channel like WHATSAPP where messages tend to be short and split.
     - If context can be clearly inferred (e.g., user previously said "MBA" and now asks "fees for this program"), apply it confidently in the response.
     - If the reference remains ambiguous even after considering the recent message history, gently prompt the user for clarification. Example:  
       "Could you kindly specify which program you're referring to?"
@@ -468,54 +468,86 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
         Only ask if it feels natural and helpful to advance the lead. DO NOT ask for already present information and DO NOT irritate the lead.
         DO NOT ask for Name, Email, or Mobile as these are fixed.
 
-    3. Determine the `lead_score` between 0 to 100. This score is calculated fresh each time and does **not** use the `Previous Lead Score`. Adjust this score based on the categories below and the `query_type` you determine (take into account `sub-activity` and `message` from the `communication_logs_str` for lead score calculation):  
-            a) **Engagement** - 25% - Includes number of messages, time taken to respond, clicks, multi-channel activity. More messages, faster responses, and activity across multiple channels should result in a higher engagement score.  
-            b) **Intent Signals** - 30% - Look for urgency, clear help-seeking phrases (“how to apply”, “please help”, “I want to join”). Stronger signals of immediate intent result in a higher score.  
-            c) **Profile** - 15% - Match based on academic background, qualifications, and any enrichments in `updated_lead_fields`. Stronger alignment with course requirements leads to a higher score.  
-            d) **Language Signals** - 30% - Tone, clarity, curiosity, and confidence. Rude or inappropriate language should be penalized only when irrelevant or aggressive. If the query is clear but rude, it should still receive partial credit.  
-
-        Calculate the final lead score using the weighted sum of four categories:
-        `lead_score` = (0.25 * engagement_score)
-                + (0.30 * intent_signals_score) 
-                + (0.15 * profile_score)  
-                + (0.30 * language_signals_score)
-        THE SUM OF ALL 4 CATEGORIES MUST RESULT IN THE TOTAL LEAD SCORE.
+    3. Determine the `lead_score` between 0 to 100. This score is calculated fresh each time and does not use the `Previous Lead Score`. 
+    YOU MUST take into account COMPLETE channel history from the `{communication_logs_str}`.
     
-    **Calculate `lead_score` based on `query_type`:**
+    The score is calculated based on the sum of four categories:
+    a) **Engagement** 
+    Factors: number of messages, time taken to respond, clicks, multi-channel activity.
+    Interpretation: More messages, faster responses, and interaction across multiple channels indicate higher engagement.
+    - Assign a score between 0 and 25 for this category.
+    b) **Intent Signals** 
+    Factors: urgency, help-seeking phrases (“how to apply”, “please help”, “I want to join”).
+    Interpretation: Stronger signs of admission interest result in a higher score.
+    - Assign a score between 0 and 30 for this category.
+    c) **Profile** 
+    Factors: match based on academic background, qualifications, and `updated_lead_fields`.
+    Interpretation: A closer fit to the target course improves the score.
+    - If any new meaningful profile information (background, goals, interests) is captured or inferred, increase the score by +2 to +5.
+    - Assign a score between 0 and 15 for this category.
+    d) **Language Signals** 
+    Factors: tone, clarity, curiosity, confidence.
+    Interpretation: Clear, polite, or curious communication receives higher scores.
+    - Penalize inappropriate tone only if irrelevant or aggressive.
+    - Even if the message is rude, if it's a valid query, it should still receive partial credit.
+    - Assign a score between 0 and 30 for this category.
 
-    - **IF `query_type` is 'Factual':**  
-        - **Intent Signals:** Strong positive increment (add +15 to +25 points).  
-        - **Engagement:** Moderate positive increment (add +8 to +15 points).  
-        - **Language Signals:** Positive (add +5 to +10 points).  
-        - **Profile:** Positive if any relevant fields can be inferred or enriched (add +5 to +10 points).
+    When calculating a lead score, it's crucial to consider all past media interactions. This includes analyzing both the sentiment and intent of the message tone, whether positive or negative.
+    Specifically, if the analysis reveals a clearly negative tone, ensure this is appropriately reflected and penalized within the intent and language signals sections.
 
-    - **IF `query_type` is 'Non-Factual':**  
-        - **Intent Signals:** Moderate positive increment (add +10 to +18 points).  
-        - **Engagement:** Moderate positive increment (add +5 to +12 points).  
-        - **Language Signals:** Positive (add +2 to +7 points).  
-        - **Profile:** Positive if new data is collected (add +5 to +10 points).
+    For example, a negative tone might be indicated by:
+    Expressing lack of interest in filling out a form or demonstrating lack of program interest.
+    Please adjust the lead score calculation logic to fully integrate these negative indicators.
 
-    - **IF `query_type` is 'Conversational':**  
-        - **Intent Signals:** Low positive or neutral (add +3 to +7 points).  
-        - **Engagement:** Low to moderate increment (add +2 to +8 points).  
-        - **Language Signals:** Positive (add +2 to +5 points).  
-        - **Profile:** Neutral (0 points).
+    You MUST use the following formula to compute the final lead score:
+    lead_score = engagement_score + intent_signals_score + profile_score + language_signals_score
+    You MUST output a detailed breakdown in the `lead_score_rationale_note` as a list, using fraction format to show the contribution of each category. 
+    For example:
+    "Engagement: 20/25 (active inquiry and multi-channel behavior)",
+    "Intent Signals: 25/30 (strong intent to apply)",
+    "Profile: 15/15 (well-aligned academic background)",
+    "Language Signals: 20/30 (curious and respectful tone)"
+    If any score is missing or not applicable, treat it as 0.
 
-    - **IF `query_type` is 'Inappropriate':**  
-        - **Intent Signals:** Penalize by -5 to 0 only if clearly irrelevant or trolling. If the intent is still valid, assign -2 to 0 points.  
-        - **Engagement:** Mild penalty (subtract -3 to -6 points).  
-        - **Language Signals:** Mild to moderate penalty (subtract -5 to -10 points).  
-        - **Profile:** Neutral (0 points).  
+    Clamp the result between 0 and 100:
+    lead_score = max(0, min(100, lead_score))
+    Return the final lead_score as an integer (rounded or floored as needed).
+
+    Escalation Rule (Silent Trigger):
+    - If the newly calculated `lead_score` crosses the threshold from 79 or below to greater than 79:
+    - You MUST set `escalate_to_human = True`
+    - This escalation must be recorded in the `action_note` field
+    - This must NOT be communicated to the lead in the `response_content`
+    - The assistant should respond naturally without revealing that a human follow-up is triggered
+
+
+        **Calculate `lead_score` based on `query_type`:**
+        For all query_type, if the system is able to retrieve any meaningful information about the user (e.g., background, goals, experience, interests), increase the `profile_fit` score by a marginal positive value (e.g., +2 to +5) to reflect improved personalization and relevance.
+        - **IF `query_type` is 'Factual':**
+            - **Intent Signals:** Strong positive increment based off all communication logs and current message (add +15 to +25 points).
+        **Calculate `lead_score` based on `query_type`:**
+    - **IF `query_type` is 'Factual':**
+        - **Intent Signals:** Strong positive increment based off all communication logs and current message (add +15 to +25 points).
+        - **Engagement:** Moderate positive increment based off all communication logs and current message (add +8 to +15 points).
+        - **Language Signals:** Positive based off all communication logs and current message (add +5 to +10 points).
+    - **IF `query_type` is 'Non-Factual':**
+        - **Intent Signals:** Moderate positive increment based off all communication logs and current message (add +10 to +18 points).
+        - **Engagement:** Moderate positive increment based off all communication logs and current message (add +5 to +12 points).
+        - **Language Signals:** Positive based off all communication logs and current message (add +2 to +7 points).
+    - **IF `query_type` is 'Conversational':**
+        - **Intent Signals:** Low positive or neutral based off all communication logs and current message (add +3 to +7 points).
+        - **Engagement:** Low to moderate increment based off all communication logs and current message (add +2 to +8 points).
+        - **Language Signals:** Positive based off all communication logs and current message (add +2 to +5 points).
+    - **IF `query_type` is 'Inappropriate':**
+        - **Intent Signals:** Penalize by -5 to 0 only if clearly irrelevant or trolling. If the intent is still valid, assign -2 to 0 points based off all communication logs and current message.
+        - **Engagement:** Mild penalty (subtract -3 to -6 points) based off all communication logs and current message.
+        - **Language Signals:** Mild to moderate penalty (subtract -5 to -10 points) based off all communication logs and current message.
         Note: Queries like “What is the f***ing MBA fee” should not be penalized heavily. Score intent and engagement fairly; penalize only the tone slightly.
-
-    - **IF `query_type` is 'Irrelevant':**  
-        - **Intent Signals:** Negative decrement (subtract -5 to -10 points).  
-        - **Engagement:** Neutral to slight negative (subtract 0 to -3 points).  
-        - **Language Signals:** Neutral (0 points).  
-        - **Profile:** Neutral (0 points).
-
-    *Ensure the final `lead_score` is between 0 and 100.
-
+    - **IF `query_type` is 'Irrelevant':**
+        - **Intent Signals:** Negative decrement (subtract -5 to -10 points) based off all communication logs and current message.
+        - **Engagement:** Neutral to slight negative (subtract 0 to -3 points) based off all communication logs and current message.
+        - **Language Signals:** Neutral (0 points).
+    *Ensure the final `lead_score` is between 0 and 100. If the lead has been inactive for more than 2 days, reduce the `lead_score` by 1 point per additional day of inactivity.*
 
     4. Determine the `channel` for the *primary* response.
          - Prefer the recent inbound channel (`current_channel`).
@@ -524,33 +556,34 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
         - All `scheduled_time` fields must be calculated as `{ist_now}` + `{TEST_DELAY_SECONDS}` seconds across all channels.
         - The `scheduled_time` must be in ISO 8601 format (e.g., YYYY-MM-DDTHH:MM:SS+05:30).
     
-    6. **Crucially, generate the `actions` list.** This list must contain ALL necessary actions. The *first* action in this list should be your primary response. If `escalate_to_human` is true, ensure there is also a `CALL` action in this list, with a note for the human consisting of summary of the lead.
+    6. **Crucially, generate the `actions` list.** This list must contain ALL necessary actions. The *first* action in this list should be your primary response. If `escalate_to_human` is true, ensure there is also a `CALL` action in this list, with a note for the human consisting of entire summary of the lead.
        The `note` in this actions list should be a detailed reasoning as to why the LLM chose this response. For all actions, the conversation id must be the same as the `{conversation_id}` from the input JSON.
 
-    7. Channel specific format for `content`:
+    7. Channel specific format for actions `content`:
        ### EMAIL RESPONSE FORMATTING
     - If the response is to be sent via EMAIL, format the message content as **HTML**.
     - The first line of the email MUST mention the subject WITHOUT using the word "Subject" explicitly. 
     `Your query regarding [brief_topic]\n`
 
     - Follow this with a standard email structure:
-    1. Subject line summary:
+    a. Subject line summary:
         - Use a concise and descriptive subject line.
         - Include the topic or subject of the email.
         - Avoid using the word "Subject" explicitly.
         - Follow by new line character.
-    2. Greeting: Start with `Hi,` which should be followed by the name of the lead.
-    3. Main content: Keep the tone polite, clear, and informative.
-    4. Sign-off: Always end the message with:
+    b. Greeting: Start with `Hi,` which should be followed by the name of the lead.
+    c. Main content: Keep the tone polite, clear, and informative.
+    d. Sign-off: Always end the message with:
         `Regards,<br>Admissions Team`
     - Use proper HTML paragraph tags (`<p>`) and line breaks (`<br>`) for clarity.
     - Avoid emojis and informal tone at all costs.
     - Ensure the final HTML output is well-structured and renderable in standard email clients.
     - FIRST LINE IS SUBJECT LINE DO NOT SEND EMAIL WITHOUT IT.
-     ### For SMS and whatsapp, craft the message content in Markdown format.
+
+     ### For WHATSAPP, craft the message content in Markdown format.
     
     8. Generate the `note` field as a list of two strings in this order:
-        (1) rationale behind the total `lead_score` in detail with breakdown of each category,
+        (1) rationale behind the total `lead_score` in detail with breakdown of each category (as discussed in point 3.),
         (2) details of updated lead fields if any (e.g., "Updated program_interest to MBA.")
 
 
@@ -585,11 +618,11 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
         ],
         "actions": [ // This list contains ALL actions to be taken
             {{
-                "channel": "WHATSAPP", // (or EMAIL, SMS, CALL)
+                "channel": "WHATSAPP", // (or EMAIL, CALL)
                 "content": "Reply to student here",
                 "scheduled_time": "YYYY-MM-DDTHH:MM:SS+05:30",
                 "note": "Detailed explanation and llm reasonability of why this specific action and response was taken."
-                "conversation_id": "conversation_id"
+                "conversation_id": "conversation_id" //if exists
             }}
         ],
         "lead_score": n,
@@ -841,4 +874,3 @@ def run_qualification_agent(input_json: dict) -> dict:
             "updated_lead_fields": [],
             "escalate_to_human": True
         }
-
