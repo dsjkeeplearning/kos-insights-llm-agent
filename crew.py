@@ -34,7 +34,7 @@ llm = ChatOpenAI(
 # --- Define UUIDs and Mapping (Global Scope) ---
 JAGSOM_UUID = "55481c47-78a1-4817-b1c1-f6460f37527d"
 VIJAYBHOOMI_UUID = "7790b5ce-6a38-47eb-ae27-eceb02b30318"
-IFIM_UUID = "00000000-0000-0000-0000-000000000000"
+IFIM_UUID = "c2773d5f-338f-402e-9467-027083b82e3c"
 
 # Mapping institute_id to Qdrant collection names (Global Scope)
 INSTITUTE_COLLECTION_MAPPING = {
