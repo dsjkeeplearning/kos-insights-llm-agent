@@ -35,6 +35,8 @@ llm = ChatOpenAI(
 JAGSOM_UUID = "55481c47-78a1-4817-b1c1-f6460f37527d"
 VIJAYBHOOMI_UUID = "7790b5ce-6a38-47eb-ae27-eceb02b30318"
 IFIM_UUID = "c2773d5f-338f-402e-9467-027083b82e3c"
+KEDGE_UUID = "1b4a0f43-3946-40c4-aca7-01deeac10c00"
+KL_UUID = "fd16c9fd-3b5f-4505-8972-914f61190486"
 
 # Mapping institute_id to Qdrant collection names (Global Scope)
 INSTITUTE_COLLECTION_MAPPING = {
@@ -42,8 +44,6 @@ INSTITUTE_COLLECTION_MAPPING = {
     VIJAYBHOOMI_UUID: "vijaybhoomi",
     IFIM_UUID: "ifim"
 }
-
-ist_now = datetime.now(timezone('Asia/Kolkata')).strftime('%A, %B %d, %Y at %I:%M:%S %p IST')
 
 # Initialize Qdrant Client
 qdrant_client = QdrantClient(
@@ -340,6 +340,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     current_channel = state.input_json.get("message", {}).get("channel", "")
     current_state = state.model_copy() # Create a copy of the state
     conversation_id = state.input_json.get("message", {}).get("conversation_id", "")
+    ist_now = datetime.now(timezone('Asia/Kolkata')).strftime('%A, %B %d, %Y at %I:%M:%S %p IST')
     # One delay value for all scheduling testing purposes
     TEST_DELAY_SECONDS = int(os.getenv("TEST_DELAY_SECONDS"))
     communication_logs_str = "\n".join([
@@ -391,15 +392,6 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     The user's original message timestamp was: {original_message_timestamp}
     
     Detected Message Intent: {message_intent}
-
-    - Calculate how long the session has been open using the difference between `ist_now` and `original_message_timestamp`.  
-    - Use this session duration to adjust the `lead_score` based on the following logic:
-
-        - If the user responded very recently (within 10 minutes), this indicates high immediacy → **slightly increase** the lead score.
-        - If the session is moderately active (10 to 60 minutes), assume normal behavior → **no major change**.
-        - If the session is stale (over 60 minutes old without resolution), lower urgency → **slightly reduce** the lead score unless the intent is still highly relevant (like 'immediate_joining' or 'counsellor_request').
-
-    Adjust lead score accordingly based on these patterns, in addition to the detected intent: {message_intent}.
 
     ## Retrieved Institutional Context (Use this for factual answers if relevant):
     {retrieved_context_str}
@@ -457,7 +449,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
 - **If** `escalate_to_human == True`, you MUST:
   - Generate an action of type `"CALL"` and set the channel as `"CALL"`.
   - Include a `note` summarizing the reason for escalation and the intent (e.g., counsellor request, immediate joining, factual query with no context).
-  - The note should also include a brief summary of the conversation so far and what the counsellor should assist with next.
+  - The note should also include a detailed summary of the conversation so far and what the counsellor should assist with next.
 
 - **If** `escalate_to_human == False`, no call is scheduled.
 
@@ -475,7 +467,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     a) **Engagement** 
     Factors: number of messages, time taken to respond, clicks, multi-channel activity.
     Interpretation: More messages, faster responses, and interaction across multiple channels indicate higher engagement.
-    - Assign a score between 0 and 25 for this category.
+    - Assign a score between 0 and 30 for this category.
     b) **Intent Signals** 
     Factors: urgency, help-seeking phrases (“how to apply”, “please help”, “I want to join”).
     Interpretation: Stronger signs of admission interest result in a higher score.
@@ -484,7 +476,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     Factors: match based on academic background, qualifications, and `updated_lead_fields`.
     Interpretation: A closer fit to the target course improves the score.
     - If any new meaningful profile information (background, goals, interests) is captured or inferred, increase the score by +2 to +5.
-    - Assign a score between 0 and 15 for this category.
+    - Assign a score between 0 and 10 for this category.
     d) **Language Signals** 
     Factors: tone, clarity, curiosity, confidence.
     Interpretation: Clear, polite, or curious communication receives higher scores.
@@ -503,9 +495,9 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     lead_score = engagement_score + intent_signals_score + profile_score + language_signals_score
     You MUST output a detailed breakdown in the `lead_score_rationale_note` as a list, using fraction format to show the contribution of each category. 
     For example:
-    "Engagement: 20/25 (active inquiry and multi-channel behavior)",
+    "Engagement: 20/30 (active inquiry and multi-channel behavior)",
     "Intent Signals: 25/30 (strong intent to apply)",
-    "Profile: 15/15 (well-aligned academic background)",
+    "Profile: 8/10 (well-aligned academic background)",
     "Language Signals: 20/30 (curious and respectful tone)"
     If any score is missing or not applicable, treat it as 0.
 
@@ -514,18 +506,15 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     Return the final lead_score as an integer (rounded or floored as needed).
 
     Escalation Rule (Silent Trigger):
-    - If the newly calculated `lead_score` crosses the threshold from 79 or below to greater than 79:
+    - If the newly calculated `lead_score` crosses the threshold from 89 or below to greater than 89:
     - You MUST set `escalate_to_human = True`
     - This escalation must be recorded in the `action_note` field
     - This must NOT be communicated to the lead in the `response_content`
     - The assistant should respond naturally without revealing that a human follow-up is triggered
 
 
-        **Calculate `lead_score` based on `query_type`:**
+   **Calculate `lead_score` based on `query_type`:**
         For all query_type, if the system is able to retrieve any meaningful information about the user (e.g., background, goals, experience, interests), increase the `profile_fit` score by a marginal positive value (e.g., +2 to +5) to reflect improved personalization and relevance.
-        - **IF `query_type` is 'Factual':**
-            - **Intent Signals:** Strong positive increment based off all communication logs and current message (add +15 to +25 points).
-        **Calculate `lead_score` based on `query_type`:**
     - **IF `query_type` is 'Factual':**
         - **Intent Signals:** Strong positive increment based off all communication logs and current message (add +15 to +25 points).
         - **Engagement:** Moderate positive increment based off all communication logs and current message (add +8 to +15 points).
@@ -563,17 +552,12 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
        ### EMAIL RESPONSE FORMATTING
     - If the response is to be sent via EMAIL, format the message content as **HTML**.
     - The first line of the email MUST mention the subject WITHOUT using the word "Subject" explicitly. 
-    `Your query regarding [brief_topic]\n`
+    - Take the first line of the input message as subject line. Follow this with a newline character (\n)
 
     - Follow this with a standard email structure:
-    a. Subject line summary:
-        - Use a concise and descriptive subject line.
-        - Include the topic or subject of the email.
-        - Avoid using the word "Subject" explicitly.
-        - Follow by new line character.
-    b. Greeting: Start with `Hi,` which should be followed by the name of the lead.
-    c. Main content: Keep the tone polite, clear, and informative.
-    d. Sign-off: Always end the message with:
+    a. Greeting: Start with `Hi,` which should be followed by the name of the lead.
+    b. Main content: Keep the tone polite, clear, and informative.
+    c. Sign-off: Always end the message with:
         `Regards,<br>Admissions Team`
     - Use proper HTML paragraph tags (`<p>`) and line breaks (`<br>`) for clarity.
     - Avoid emojis and informal tone at all costs.
@@ -590,10 +574,6 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     ## INPUT
 
     {input_json_str}
-
-    ## COMMUNICATION LOGS
-
-    {communication_logs_str}
 
     ## LEAD FIELDS
 
