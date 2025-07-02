@@ -85,31 +85,6 @@ class TimeParsingError(AgentError):
     """Time parsing related errors"""
     pass
 
-class TimeUtils:
-    @staticmethod
-    def parse_timestamp(timestamp_str: str) -> datetime:
-        try:
-            return datetime.fromisoformat(timestamp_str)
-        except Exception as e:
-            raise TimeParsingError(f"Invalid timestamp format: {e}")
-
-    @staticmethod
-    def get_next_business_hour(dt: datetime, start_hour: int = 10, end_hour: int = 19) -> datetime:
-        ist_tz = timezone('Asia/Kolkata')
-        dt_ist = dt.astimezone(ist_tz)
-
-        # If time is before start_hour, schedule for today at start_hour
-        if dt_ist.hour < start_hour:
-            return dt_ist.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-
-        # If time is after end_hour, schedule for next day at start_hour
-        if dt_ist.hour >= end_hour:
-            next_day = dt_ist + timedelta(days=1)
-            return next_day.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-
-        return dt_ist
-
-
 import tiktoken
 
 def handle_token_overflow(payload: dict, model_name: str = "gpt-4o-mini") -> dict | None:
@@ -162,16 +137,12 @@ class AgentState(BaseModel):
     escalate_to_human: bool = False
     inappropriate_message: bool = False
     requires_counsellor: bool = False
-    message_intent: str = "" #general query
+    message_intent: str = ""
     immediate_joining: bool = False
-    # --- NEW FIELDS ---
     institute_id: str
     original_message_timestamp: str = ""
-    # --- NEW RAG FIELDS ---
     retrieved_context: List[str] = Field(default_factory=list)
     rag_answer: str
-    # --- END NEW RAG FIELDS ---
-
 
 # --- Define Output Pydantic Model (for final output) ---
 class QualificationOutput(BaseModel):
@@ -231,7 +202,6 @@ def process_message_node(state: AgentState, max_retries: int = 3) -> AgentState:
     # This automatically handles the JSON parsing and Pydantic validation
     structured_llm = llm.with_structured_output(IntentClassifierOutput)
     intent_chain = intent_prompt | structured_llm
-    # --- End of change ---
 
     for attempt in range(max_retries):
         try:
@@ -247,16 +217,12 @@ def process_message_node(state: AgentState, max_retries: int = 3) -> AgentState:
             # but you can still add a print for the parsed result if needed:
             print(f"\n--- DEBUG: Parsed Intent Classification Result (Attempt {attempt + 1}) ---\n{classification_result.model_dump_json(indent=2)}\n--- End Parsed Result ---\n")
 
-
             state.message_intent = classification_result.intent
-            # state.notes.append(f"Intent classified by LLM as: '{classification_result.intent}'. Reasoning: {classification_result.reasoning}")
 
             state.requires_counsellor = (state.message_intent == "counsellor_request")
             state.inappropriate_message = (state.message_intent == "inappropriate_message") 
             state.immediate_joining = (state.message_intent == "immediate_joining") 
-            #have a state for RAG factual query
-
-            # print(f"Intent classified by LLM as: '{classification_result.intent}'. Reasoning: {classification_result.reasoning}")
+            
             return state # Successfully classified, exit loop
 
         except PydanticValidationError as e:
@@ -272,12 +238,10 @@ def process_message_node(state: AgentState, max_retries: int = 3) -> AgentState:
 
     # If all retries fail
     state.message_intent = "general_query"
-    # state.notes.append("LLM intent classification failed after all retries. Defaulting to 'general_query'.")
     print("LLM intent classification failed after all retries. Defaulting to 'general_query'.")
     return state
 
 
-# --- NEW RAG NODE ---
 def retrieve_context_node(state: AgentState, max_retries: int = 3) -> AgentState:
     message_content = state.input_json.get("message", {}).get("message", "")
     institute_id = state.institute_id
@@ -323,8 +287,6 @@ def retrieve_context_node(state: AgentState, max_retries: int = 3) -> AgentState
         else:
             print("No context retrieved.")
 
-        # state.notes.append(f"Retrieved {len(state.retrieved_context)} context chunks from Qdrant collection '{collection_name}'.")
-
     except Exception as e:
         error_message = f"Error retrieving context from Qdrant ({collection_name}): {e}"
         # state.notes.append(error_message)
@@ -334,7 +296,7 @@ def retrieve_context_node(state: AgentState, max_retries: int = 3) -> AgentState
     print(f"--- End RAG Retrieval Debug ---\n")
     return state
 
-# --- MODIFIED RAG GENERATION NODE ---
+
 def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     current_message = state.input_json.get("message", {}).get("message", "")
     current_channel = state.input_json.get("message", {}).get("channel", "")
@@ -398,60 +360,60 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
 
   ##Your Tasks based on 'Detected Message Intent':
 
-### IF `Detected Message Intent` is `'counsellor_request'`:
-- The `response_content` for the user MUST be:  
-  `"I have forwarded your request to our admissions team. In the meantime, is there anything else I can assist you with?"`
-- The `channel` MUST be the same as the inbound message `{current_channel}`.
-- Set `escalate_to_human` to `True`.
+    ### IF `Detected Message Intent` is `'counsellor_request'`:
+    - The `response_content` for the user MUST be:  
+    `"I have forwarded your request to our admissions team. In the meantime, is there anything else I can assist you with?"`
+    - The `channel` MUST be the same as the inbound message `{current_channel}`.
+    - Set `escalate_to_human` to `True`.
 
----
+    ---
 
-### ELSE IF `Detected Message Intent` is `'inappropriate_message'`:
-- The `response_content` for the user MUST be:  
-  `"Sorry, I can't help you with that at the moment. May I assist you with anything else?"`
-- The `channel` MUST be the same as the inbound message `{current_channel}`.
-- Set `escalate_to_human` to `False`.
+    ### ELSE IF `Detected Message Intent` is `'inappropriate_message'`:
+    - The `response_content` for the user MUST be:  
+    `"Sorry, I can't help you with that at the moment. May I assist you with anything else?"`
+    - The `channel` MUST be the same as the inbound message `{current_channel}`.
+    - Set `escalate_to_human` to `False`.
 
----
+    ---
 
-### ELSE IF `Detected Message Intent` is `'immediate_joining'`:
-- The `response_content` for the user MUST be:  
-  `"Thanks for letting me know you're ready to move forward. I've informed the admissions team, and someone will be reaching out to you shortly to help you with the next steps. If you have any questions or need anything in the meantime, feel free to ask."`
-- The `channel` MUST be the same as the inbound message `{current_channel}`.
-- Set `escalate_to_human` to `True`.
+    ### ELSE IF `Detected Message Intent` is `'immediate_joining'`:
+    - The `response_content` for the user MUST be:  
+    `"Thanks for letting me know you're ready to move forward. I've informed the admissions team, and someone will be reaching out to you shortly to help you with the next steps. If you have any questions or need anything in the meantime, feel free to ask."`
+    - The `channel` MUST be the same as the inbound message `{current_channel}`.
+    - Set `escalate_to_human` to `True`.
 
----
+    ---
 
-### ELSE IF `Detected Message Intent` is `'factual_query'`:
+    ### ELSE IF `Detected Message Intent` is `'factual_query'`:
 
-- If the `Retrieved Institutional Context` provides a relevant answer:
-  - Use that information to construct a precise and helpful `response_content`.
-  - Set `escalate_to_human` to `False`.
+    - If the `Retrieved Institutional Context` provides a relevant answer:
+    - Use that information to construct a precise and helpful `response_content`.
+    - Set `escalate_to_human` to `False`.
 
-- If the context does **not** provide a sufficient answer:
-  - Construct a polite and empathetic `response_content`, such as:  
-    "Thanks for reaching out! I couldn't find a reliable answer at the moment, so I've shared your message with our admissions team. They'll be in touch soon."
-  - The `channel` MUST be the same as the inbound message `{current_channel}`.
-  - Set `escalate_to_human` to `True`.
+    - If the context does **not** provide a sufficient answer:
+    - Construct a polite and empathetic `response_content`, such as:  
+        "Thanks for reaching out! I couldn't find a reliable answer at the moment, so I've shared your message with our admissions team. They'll be in touch soon."
+    - The `channel` MUST be the same as the inbound message `{current_channel}`.
+    - Set `escalate_to_human` to `True`.
 
----
+    ---
 
-### ELSE IF `Detected Message Intent` is `'general_query'`:
-- The `response_content` should reflect a conversational, helpful tone (e.g., greeting, casual inquiry, or open-ended statement).
-- DO NOT escalate or trigger any specific action.
-- Keep `lead_score` unchanged or apply a minor increase if the engagement is positive.
-- Set `escalate_to_human` to `False`.
+    ### ELSE IF `Detected Message Intent` is `'general_query'`:
+    - The `response_content` should reflect a conversational, helpful tone (e.g., greeting, casual inquiry, or open-ended statement).
+    - DO NOT escalate or trigger any specific action.
+    - Keep `lead_score` unchanged or apply a minor increase if the engagement is positive.
+    - Set `escalate_to_human` to `False`.
 
----
+    ---
 
-##Call Scheduling Logic (Centralized):
+    ##Call Scheduling Logic (Centralized):
 
-- **If** `escalate_to_human == True`, you MUST:
-  - Generate an action of type `"CALL"` and set the channel as `"CALL"`.
-  - Include a `note` summarizing the reason for escalation and the intent (e.g., counsellor request, immediate joining, factual query with no context).
-  - The note should also include a detailed summary of the conversation so far and what the counsellor should assist with next.
+    - **If** `escalate_to_human == True`, you MUST:
+    - Generate an action of type `"CALL"` and set the channel as `"CALL"`.
+    - Include a `note` summarizing the reason for escalation and the intent (e.g., counsellor request, immediate joining, factual query with no context).
+    - The note should also include a detailed summary of the conversation so far and what the counsellor should assist with next.
 
-- **If** `escalate_to_human == False`, no call is scheduled.
+    - **If** `escalate_to_human == False`, no call is scheduled.
 
     **FOR ALL INTERACTIONS AND INTENTS:**
     1. Extract and update all relevant template_field_values_str into updated_lead_fields by identifying missing or enrichable fields from the current message or communication logs. Only include fields where a valid value is available — do not add fields with missing values.
@@ -550,9 +512,10 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
 
     7. Channel specific format for actions `content`:
        ### EMAIL RESPONSE FORMATTING
-    - If the response is to be sent via EMAIL, format the message content as **HTML**.
+    
     - The first line of the email MUST mention the subject WITHOUT using the word "Subject" explicitly. 
-    - Take the first line of the input message as subject line. Follow this with a newline character (\n)
+    - Take the first line of the input message (until you encounter \n) as subject line. 
+        Follow this with a newline character (\n). THIS IS COMPULSORY.
 
     - Follow this with a standard email structure:
     a. Greeting: Start with `Hi,` which should be followed by the name of the lead.
@@ -569,7 +532,6 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     8. Generate the `note` field as a list of two strings in this order:
         (1) rationale behind the total `lead_score` in detail with breakdown of each category (as discussed in point 3.),
         (2) details of updated lead fields if any (e.g., "Updated program_interest to MBA.")
-
 
     ## INPUT
 
@@ -608,13 +570,12 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
         "lead_score": n,
         "lead_score_increment_rationale": "Rationale for total lead score with breakdown of each category clearly",
         "updated_fields_rationale": "Explanation of field updates only",
-        //should be per channel? "escalate_to_human": False
+        //"escalate_to_human": False
     }}
     """
 
     prompt = ChatPromptTemplate.from_template(template)
 
-    
     chain = (
         prompt
         | llm
@@ -677,7 +638,6 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
             "conversation_id": "conversation_id"
         }]
         current_state.escalate_to_human = True
-        # current_state.lead_score remains as is
         
         # Populate generated_notes for the fallback case
         generated_notes[0] = f"Error in proactive_info_gathering_and_response_node: {e}"
@@ -722,7 +682,7 @@ def route_message(state: AgentState) -> str:
         return "counsellor_flow"
     elif state.message_intent == "inappropriate_message":
         return "inappropriate_flow"
-    elif state.message_intent == "factual_query": # New condition for factual queries
+    elif state.message_intent == "factual_query":
         return "rag_flow"
     elif state.message_intent == 'immediate_response':
         return "immediate_response_flow"
@@ -801,7 +761,7 @@ def run_qualification_agent(input_json: dict) -> dict:
                     fallback_state.actions_from_llm = [
                         {
                             "channel": input_json.get("message", {}).get("channel", "WHATSAPP"),
-                            "content": "We’re facing a temporary technical issue. Our team will follow up shortly. Thank you for your patience.",
+                            "content": "We're facing a temporary technical issue. Our team will follow up shortly. Thank you for your patience.",
                             "scheduled_time": (datetime.now() + timedelta(minutes=3)).strftime("%Y-%m-%dT%H:%M:%S+05:30"),
                             "note": f"Automated fallback action due to: {e}"
                         },
@@ -817,20 +777,6 @@ def run_qualification_agent(input_json: dict) -> dict:
         final_output = construct_output_node(final_agent_state)
         return final_output.model_dump()
 
-    except ValidationError as e:
-        return {
-            "error": "input_validation_error",
-            "message": str(e),
-            "lead_id": input_json.get("lead_id", ""),
-            "lead_score": input_json.get("lead_score", 0),
-            "reference_id": input_json.get("reference_id", ""),
-            "note": [
-                f"Input data validation failed: {str(e)}",
-                "No agent processing occurred due to invalid input."
-            ],
-            "actions": [],
-            "updated_lead_fields": []
-        }
 
     except (LLMError, TimeParsingError) as e:
         return {
