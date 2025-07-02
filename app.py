@@ -2,8 +2,7 @@
 #type:ignore
 from flask import Flask, request, Response, jsonify
 import json, os
-from crew import run_qualification_agent
-
+from crew import run_qualification_agent, ValidationError
 import uuid
 import logging
 from transcription import process_transcription, handle_transcription_request
@@ -34,7 +33,11 @@ def qualify_lead():
             error_msg = {"error": "No JSON payload provided"}
             return Response(json.dumps(error_msg), mimetype='application/json', status=400)
 
-        result = run_qualification_agent(data)
+        try:
+            result = run_qualification_agent(data)
+        except ValidationError as e:
+            error_msg = {"error": str(e)}
+            return Response(json.dumps(error_msg), mimetype='application/json', status=400)
 
         json_string = json.dumps(result, indent=2, sort_keys=False)
         return Response(json_string, mimetype='application/json', status=200)
