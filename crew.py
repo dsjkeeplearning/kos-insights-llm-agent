@@ -41,7 +41,7 @@ KL_UUID = "fd16c9fd-3b5f-4505-8972-914f61190486"
 # Mapping institute_id to Qdrant collection names (Global Scope)
 INSTITUTE_COLLECTION_MAPPING = {
     JAGSOM_UUID: "jagsom",
-    VIJAYBHOOMI_UUID: "vijaybhoomi",
+    VIJAYBHOOMI_UUID: "vu",
     IFIM_UUID: "ifim"
 }
 
