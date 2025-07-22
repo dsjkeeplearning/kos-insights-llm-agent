@@ -66,8 +66,8 @@ class InputValidator:
         if not isinstance(message, dict) or 'message' not in message:
             raise ValidationError("Invalid message format")
 
-        if input_json.get('institute_id') not in INSTITUTE_COLLECTION_MAPPING:
-             raise ValidationError(f"Invalid institute_id: {input_json.get('institute_id')}. Must be one of {list(INSTITUTE_COLLECTION_MAPPING.keys())}")
+        # if input_json.get('institute_id') not in INSTITUTE_COLLECTION_MAPPING:
+        #      raise ValidationError(f"Invalid institute_id: {input_json.get('institute_id')}. Must be one of {list(INSTITUTE_COLLECTION_MAPPING.keys())}")
 
 class AgentError(Exception):
     """Base exception for agent errors"""
@@ -390,7 +390,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
     - Use that information to construct a precise and helpful `response_content`.
     - Set `escalate_to_human` to `False`.
 
-    - If the context does **not** provide a sufficient answer:
+    - If the context DOES NOT provide a sufficient answer or if the `Retrieved Institutional Context` is empty:
     - Construct a polite and empathetic `response_content`, such as:  
         "Thanks for reaching out! I couldn't find a reliable answer at the moment, so I've shared your message with our admissions team. They'll be in touch soon."
     - The `channel` MUST be the same as the inbound message `{current_channel}`.
