@@ -16,11 +16,10 @@ def process_transcription_async(webhook_url, data):
     logging.info(f"Background task: Starting transcription for data with fixed callback: {webhook_url}")
     try:
         result = handle_transcription_request(data)
-
+        # result = json.dumps(result, indent=2)
         logging.info(f"Background task: Transcription finished. Attempting to post result to webhook: {webhook_url}")
-        response = requests.post(webhook_url, json=result, headers={"Content-Type": "application/json"})
-        response.raise_for_status()
-        logging.info(f"Background task: Successfully posted transcription result to webhook. Status: {response.status_code}")
+        requests.post(webhook_url, json=result, headers={"Content-Type": "application/json"})
+        logging.info(f"Background task: Successfully posted transcription result to webhook")
 
     except requests.exceptions.RequestException as req_e:
         logging.error(f"Background task: Error posting transcription result to webhook {webhook_url}: {req_e}")
