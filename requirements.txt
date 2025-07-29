@@ -10,3 +10,4 @@ whisperx
 requests
 uuid
 sentence-transformers
+redis

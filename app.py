@@ -8,6 +8,7 @@ import logging
 from transcription_async import process_transcription_async
 # from crew_async import process_qualification_async
 import concurrent.futures
+from job_queue import job_queue
 
 app = Flask(__name__)
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -48,38 +49,38 @@ def qualify_lead():
         return Response(json.dumps(error_msg), mimetype='application/json', status=500)
 
 
-@app.route('/transcribe', methods=['POST'])
-def transcribe():
-    """
-    API endpoint to handle transcription requests asynchronously.
-    Expects a JSON payload with audio or transcription parameters.
-    The webhook URL for results is configured via environment variable.
-    Immediately returns a processing receipt response (HTTP 200 OK).
-    The actual transcription happens in a background thread, and the result
-    is sent to the pre-configured webhook URL upon completion.
-    """
-    try:
-        data = request.get_json()
+# @app.route('/transcribe', methods=['POST'])
+# def transcribe():
+#     """
+#     API endpoint to handle transcription requests asynchronously.
+#     Expects a JSON payload with audio or transcription parameters.
+#     The webhook URL for results is configured via environment variable.
+#     Immediately returns a processing receipt response (HTTP 200 OK).
+#     The actual transcription happens in a background thread, and the result
+#     is sent to the pre-configured webhook URL upon completion.
+#     """
+#     try:
+#         data = request.get_json()
 
-        # Get the webhook URL from an environment variable
-        webhook_url = os.getenv("TRANSCRIPTION_WEBHOOK_URL")
-        # logging.info(f"Transcription request received. Submitting to background for webhook: {webhook_url}")
+#         # Get the webhook URL from an environment variable
+#         webhook_url = os.getenv("TRANSCRIPTION_WEBHOOK_URL")
+#         # logging.info(f"Transcription request received. Submitting to background for webhook: {webhook_url}")
 
-        # Submit the background transcription task to the thread pool
-        executor.submit(process_transcription_async, webhook_url, data)
+#         # Submit the background transcription task to the thread pool
+#         executor.submit(process_transcription_async, webhook_url, data)
 
-        # Immediately return a 200 OK response
-        return jsonify({
-            "jobId": data.get("jobId"),
-            "status": "QUEUED",
-        }), 200 # HTTP 200 OK
+#         # Immediately return a 200 OK response
+#         return jsonify({
+#             "jobId": data.get("jobId"),
+#             "status": "QUEUED",
+#         }), 200 # HTTP 200 OK
 
-    except Exception as e:
-        # logging.error(f"Error in transcribe endpoint: {e}", exc_info=True)
-        return jsonify({
-            "jobId": data.get("jobId"),
-            "status": "FAILED",
-        }), 500
+#     except Exception as e:
+#         # logging.error(f"Error in transcribe endpoint: {e}", exc_info=True)
+#         return jsonify({
+#             "jobId": data.get("jobId"),
+#             "status": "FAILED",
+#         }), 500
 
 
 # @app.route("/qualify_lead_async", methods=["POST"])
@@ -112,6 +113,34 @@ def transcribe():
 #         # Return 500 Internal Server Error with exception message on failure
 #         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/transcribe', methods=['POST'])
+def transcribe():
+    try:
+        data = request.get_json()
+        job_id = data.get("jobId")
+        webhook_url = os.getenv("TRANSCRIPTION_WEBHOOK_URL")
+
+        if job_queue.full():
+            return jsonify({
+                "jobId": job_id,
+                "status": "REJECTED",
+                "message": "Server is busy. Try again later."
+            }), 429
+
+        job_queue.put((webhook_url, data))
+
+        return jsonify({
+            "jobId": job_id,
+            "status": "QUEUED"
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "jobId": data.get("jobId", None),
+            "status": "FAILED",
+            "error": str(e)
+        }), 500
 
 
 if __name__ == "__main__":
