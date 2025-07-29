@@ -5,8 +5,8 @@ import json, os
 from crew import run_qualification_agent, ValidationError
 import uuid
 import logging
-from transcription import process_transcription, handle_transcription_request
-from crew_async import process_qualification_async
+from transcription_async import process_transcription_async
+# from crew_async import process_qualification_async
 import concurrent.futures
 
 app = Flask(__name__)
