@@ -35,7 +35,7 @@ def handle_transcription_request(data):
         data (dict): Request payload
 
     Returns:
-        dict: Response with job_id, lead_id, transcription results, etc.
+        dict: Response with job_id, transcription results, and summary.
     """
     try:
         # Extract required and optional fields from the 'data' dictionary
@@ -48,24 +48,16 @@ def handle_transcription_request(data):
         # Transcribe and diarize the audio
         result = process_transcription(fileUrl, local_filename)
 
-        # Assign speaker roles using LLM
-        roles = assign_speaker_roles(result["conversation"])
+        # Assign speaker roles and clean using LLM
+        cleaned = assign_speaker_roles(result["conversation"])
         
-        # Create reverse mapping for role replacement
-        role_mapping = {spk_id: role for spk_id, role in roles.items()}
-        
-        # Update conversation with assigned roles
-        updated_conversation = []
-        for turn in result["conversation"]:
-            speaker = turn["speaker"]
-            # Replace speaker ID with assigned role if available
-            turn["speaker"] = role_mapping.get(speaker, speaker)
-            updated_conversation.append(turn)
+        summary = summarize_transcript(cleaned)
 
         return {
             "jobId": jobId,
             "status": "COMPLETED",
-            "conversation": updated_conversation  # Updated with role names
+            "conversation": cleaned,  # Updated with role names
+            "summary": summary
         }
 
     except Exception as e:
@@ -179,36 +171,148 @@ def format_speaker_blocks(segments):
 
 def assign_speaker_roles(conversation):
     """
-    Automatically determine Lead/Agent roles using LLM
+    Automatically determine Student/Counsellor roles and also clean transcript using LLM.
     
     Args:
-        conversation (list): List of conversation turns with speaker and text
+        conversation (list): List of conversation turns with speaker and text.
         
     Returns:
-        dict: Mapping of original speaker IDs to assigned roles (Lead/Agent)
+        list: List of conversation turns with speaker and text.
     """
-    # Format conversation for analysis
-    convo_lines = []
-    for turn in conversation:
-        convo_lines.append(f"{turn['speaker']}: {turn['text']}")
-    convo_string = "\n".join(convo_lines)
 
-    system_prompt = (
-        "You are an expert AI assistant analyzing a sales call transcript between an EdTech agent and a student lead (or their guardian). "
-        "Your primary goal is to accurately identify and assign one of two roles — *'Lead'* or *'Agent'* — to all speakers present in the conversation, *even if the diarization tool has incorrectly assigned multiple speaker IDs to a single individual.*\n"
-        "Regardless of how many speaker IDs are present (e.g., SPEAKER_00, SPEAKER_01, SPEAKER_02, etc.), you must consolidate them so that the final output assigns roles to *exactly two unique individuals: one 'Lead' and one 'Agent'.*\n\n"
-        "Here are the rules for role assignment and output format:\n"
-        "1. *'Lead'*: This role belongs to the prospective student or their guardian. They will typically be asking questions about courses, fees, admissions processes, or expressing interest in enrolling.\n"
-        "2. *'Agent'*: This role belongs to the EdTech representative. They will be answering questions, explaining course offerings, providing program details, discussing payment plans, and generally guiding or persuading the lead.\n"
-        "3. *Crucial Consolidation*: The diarization tool (WhisperX) may sometimes incorrectly split a single person's speech into multiple speaker IDs (e.g., SPEAKER_00 and SPEAKER_02 might both be the 'Lead'). You *must* identify such instances by analyzing the content and continuity of speech. All speaker IDs that belong to the same person must be assigned the *same consolidated role* ('Lead' or 'Agent').\n"
-        "4. *Final Role Count*: Your output must reflect *exactly one 'Lead' and one 'Agent'*. All distinct speaker IDs from the input conversation must be mapped to one of these two consolidated roles.\n"
-        "5. *Output Format*: Your output MUST be a JSON object where each detected speaker ID from the input is mapped to its assigned role ('Lead' or 'Agent').\n"
-        "6. *No Extra Content*: Output ONLY the JSON. Do not include any explanations, comments, or additional formatting.\n"
-    )
+    system_prompt = ("""
+        You are an expert transcriber and editor. Your task is to take a raw sales call transcript between an EdTech **Counsellor** and a **Student**, clean it up, and format it for clarity and readability.
+        ## Your Specific Instructions:
+
+        ### Punctuation
+        Add all necessary punctuation (periods, commas, question marks, etc.) to make sentences grammatically correct and easy to read.
+        ### Grammar
+        Fix any grammatical errors, awkward phrasing, or incomplete sentences while preserving the original meaning.
+        **Important:** Do **not** make drastic changes or rewrite the content beyond necessary corrections.
+        ### Filler Words
+        Remove common filler words such as:
+        - *um*, *uh*, *like*, *you know*, *basically*, *actually*, *so* (when used as a filler), *right* (when used as a filler), *I mean*
+        ### Speaker Labels
+        Each line must be clearly labeled as either **"Counsellor"** or **"Student"**. However, the input transcript may have **incorrect or missing speaker assignments**, so you must:
+        - **Carefully analyze each line** to correctly determine the speaker based on content and intent.
+        - **Reassign roles if they are incorrect**, using the following detailed context:
+
+        ## Role Identification Guidelines
+        ### Counsellor
+        - Represents the **EdTech company or University/College**.
+        - Asks sales-oriented or qualification questions like:
+          - “What's your graduation year?”
+          - “Are you looking for a full-time or part-time course?”
+        - Shares information about:
+          - Course offerings, fees, placements, payment options, program structures, deadlines.
+        - Tries to **guide or persuade** the student to take admission.
+        - Often **initiates the conversation** and drives it forward.
+        ### Student
+        - A **prospective learner** (or occasionally their parent/guardian).
+        - Typically asks **academic or admissions-related doubts** such as:
+          - “Is this course available online?”
+          - “What are the job opportunities?”
+          - “What is the fee structure?”
+        - Responds to questions about their background, interests, and preferences.
+        - May express hesitation or need more clarity before making a decision.
+        
+        ## Important Notes on Input Quality
+        - **Expect speaker labels to be missing or inaccurate**. Your role includes **correcting them** wherever needed.
+        - Some parts may be **jumbled, misattributed, or fragmented**. Use contextual clues to make sensible assignments without assuming details not present in the transcript.
+        ## Output Format
+        Output only a **JSON list** (i.e., an array of objects). Each object must contain:
+        - `"speaker"`: One of `"Counsellor"` or `"Student"`
+        - `"text"`: The cleaned, properly punctuated transcript line.
+
+        ### Example Output
+        ```json
+        [
+            {
+                "speaker": "Counsellor",
+                "text": "Hello, I'm calling from ABC University regarding your course inquiry."
+            },
+            {
+                "speaker": "Student",
+                "text": "Hi, yes. I wanted to know more about the online MBA program."
+            }
+        ]
+        """)
+
     user_prompt = f"""
         CONVERSATION:
-        {convo_string}
+        {conversation}
+
         OUTPUT:
+        """
+
+    try:
+        # Create messages list for ChatOpenAI
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # Generate content using ChatOpenAI (already initialized as 'llm' globally)
+        response = llm.invoke(messages)
+        
+        response_text = response.content.strip()
+        logger.info(f"Raw response: {response_text}")
+        
+        # Clean the response
+        json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
+        json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
+        
+        # Extract JSON object from text
+        match = re.search(r'\[.*\]|\{.*\}', json_str, re.DOTALL)
+        if match:
+            json_str = match.group()
+        json_str = json.loads(json_str)
+        return json_str
+        
+    except Exception as e:
+        logger.error(f"Cleaning and role assignment failed: {str(e)}")
+        logger.error(f"Raw response: {response_text if 'response_text' in locals() else 'N/A'}")
+        return {}
+
+def summarize_transcript(conversation):
+    """
+    Summarize the conversation using LLM.
+    
+    Args:
+        conversation (list): List of conversation turns with speaker and text.
+        
+    Returns:
+        dict: Summary of the conversation with different keys.
+    """
+
+    system_prompt = ("""
+      You are an expert sales call analyst. Your task is to analyze the following EdTech sales call transcript between a 'Counsellor' and a 'Student' and produce a structured summary. Your summary must strictly cover the following four aspects:
+
+      1. **Interest Level:** Assess the student's level of interest in the EdTech offering (choose from: 'highly interested', 'moderately interested', 'undecided', 'low interest', or 'exploring options'). Include a brief justification based on the conversation.
+
+      2. **Questions Asked:** List the key questions or clarifications the student asked the counsellor—these may relate to the courses, curriculum, fees, admission process, career prospects, etc.
+
+      3. **Objections:** Identify any concerns, hesitations, or objections raised by the student (e.g., cost concerns, lack of time, doubts about course fit, technical challenges).
+
+      4. **Next Steps:** Clearly outline any next steps discussed or agreed upon between the counsellor and student (e.g., follow-up call, sending brochure, reviewing course content, booking a demo, confirming enrollment).
+
+      5. **Output Format:** Return the result **only** as a valid JSON object in the following format (no explanations or extra text):
+
+      ```json
+      {
+          "interest_level": "string",
+          "questions_asked": "string",
+          "objections": "string",
+          "next_steps": "string"
+      }
+        Be concise but complete. Base your judgment strictly on the content of the conversation."""
+    )
+
+    user_prompt = f"""
+        CLEANED CONVERSATION:
+        {conversation}
+
+        OUTPUT: 
         """
 
     try:
@@ -232,19 +336,10 @@ def assign_speaker_roles(conversation):
         match = re.search(r'\{[\s\S]*\}', json_str)
         if match:
             json_str = match.group()
-        
-        # Parse JSON
-        roles = json.loads(json_str)
-        
-        # Validate roles
-        valid_roles = {'Lead', 'Agent'}
-        if not all(role in valid_roles for role in roles.values()):
-            raise ValueError(f"Invalid roles detected: {roles}. Must be 'Lead' or 'Agent'")
-            
-        logger.info(f"Role assignment successful: {roles}")
-        return roles
+        json_str = json.loads(json_str)
+        return json_str
         
     except Exception as e:
-        logger.error(f"Role assignment failed: {str(e)}")
+        logger.error(f"Summary generation failed: {str(e)}")
         logger.error(f"Raw response: {response_text if 'response_text' in locals() else 'N/A'}")
         return {}
