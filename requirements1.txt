@@ -1,0 +1,8 @@
+whisperx
+python-dotenv
+langchain-openai
+flask
+redis
+apscheduler
+requests
+uuid
