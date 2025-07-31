@@ -2,12 +2,12 @@ import whisperx
 import os
 import uuid
 import requests
-import logging
 import warnings
 from dotenv import load_dotenv
 import re
 import json
 from langchain_openai import ChatOpenAI
+from logging_config import logger
 
 load_dotenv()
 
@@ -18,14 +18,16 @@ llm = ChatOpenAI(
    api_key=os.environ["OPENAI_API_KEY"]
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # Attempt to get Hugging Face auth token from environment variable
 hf_token = os.getenv("HF_AUTH_TOKEN")
+
+def get_log_context(jobId=None, fileUrl=None):
+    return {
+        "jobId": jobId or "UNKNOWN",
+        "fileUrl": fileUrl or "UNKNOWN"
+    }
 
 def handle_transcription_request(data):
     """
@@ -38,102 +40,111 @@ def handle_transcription_request(data):
         dict: Response with job_id, transcription results, and summary.
     """
     try:
-        # Extract required and optional fields from the 'data' dictionary
         jobId = data.get("jobId")
         fileUrl = data.get("fileUrl") 
+        local_filename = f"audio_{uuid.uuid4().hex}.mp3"
 
-        # Generate a unique filename
-        local_filename = f"audio_{uuid.uuid4().hex}.mp3" #Uncomment this when we get link
+        logger.info("Transcription job received", extra=get_log_context(jobId, fileUrl))
 
-        # Transcribe and diarize the audio
-        result = process_transcription(fileUrl, local_filename)
+        result = process_transcription(fileUrl, local_filename, jobId)
 
-        # Assign speaker roles and clean using LLM
-        cleaned = assign_speaker_roles(result["conversation"])
+        try:
+            # MODIFIED: Check if the returned value is the "Unusable" string
+            cleaned_or_unusable_string = assign_speaker_roles(result["conversation"])
+            if isinstance(cleaned_or_unusable_string, str) and cleaned_or_unusable_string.startswith("Unusable:"):
+                logger.info(f"Transcript rejected", extra=get_log_context(jobId, fileUrl))
+                return {
+                    "jobId": jobId,
+                    "status": "REJECTED",
+                    "reason": cleaned_or_unusable_string
+                }
+            cleaned = cleaned_or_unusable_string # Assign to 'cleaned' if not rejected
+            logger.info("Cleaning and speaker roles assigned successfully", extra=get_log_context(jobId, fileUrl))
+        except Exception as e:
+            logger.error("Error assigning speaker roles and cleaning", extra=get_log_context(jobId, fileUrl))
+            raise
         
-        summary = summarize_transcript(cleaned)
+        try:
+            summary = summarize_transcript(cleaned)
+            logger.info("Summary generated successfully", extra=get_log_context(jobId, fileUrl))
+        except Exception as e:
+            logger.error("Error during transcript summarization", extra=get_log_context(jobId, fileUrl))
+            raise
+
+        logger.info("Transcription job completed", extra=get_log_context(jobId, fileUrl))
 
         return {
             "jobId": jobId,
             "status": "COMPLETED",
-            "conversation": cleaned,  # Updated with role names
+            "conversation": cleaned,
             "summary": summary
         }
 
     except Exception as e:
-        logger.exception(f"Failed to handle transcription request. Error: {str(e)}")
+        logger.error(f"Failed to handle transcription request. Error: {str(e)}", extra=get_log_context(jobId, fileUrl))
         return {
             "jobId": jobId,
-            "status": "FAILED"
+            "status": "FAILED",
+            "reason": str(e)
         }
+    
+    finally: # ADDED: Ensure local_filename is cleaned up here
+        if local_filename and os.path.exists(local_filename):
+            try:
+                os.remove(local_filename)
+                logger.info(f"Cleaned up file {local_filename}", extra=get_log_context(jobId, fileUrl))
+            except Exception as e:
+                logger.warning(f"Failed to delete temp file {local_filename}: {str(e)}", extra=get_log_context(jobId, fileUrl))
 
-def download_audio(audio_url, local_filename):
-    """
-    Downloads an audio file from a public URL.
-
-    Args:
-        audio_url (str): URL to the audio file
-        local_filename (str): Destination path to save the file
-
-    Raises:
-        Exception: If the download fails
-    """
+def download_audio(audio_url, local_filename, jobId=None):
     try:
-        with requests.get(audio_url, stream=True) as r:
+        with requests.get(audio_url, stream=True, timeout=20, allow_redirects=True) as r:
             r.raise_for_status()
+            
+            # Validate content-type
+            content_type = r.headers.get("Content-Type", "")
+            if not content_type.startswith("audio/"):
+                raise Exception(f"Invalid Content-Type: {content_type}")
+            
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        logger.info(f"Downloaded audio to {local_filename}")
+
+        logger.info(f"Downloaded audio to {local_filename}", extra=get_log_context(jobId, audio_url))
+
+    except requests.exceptions.Timeout as e:
+        raise Exception(f"Download failed: Timeout occurred: {str(e)}")
+    except requests.exceptions.TooManyRedirects as e:
+        raise Exception(f"Download failed: Too many redirects: {str(e)}")
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error downloading audio: {str(e)}")
-        raise Exception(f"Failed to download audio file: {str(e)}")
+        raise Exception(f"Download failed: {str(e)}")
     except IOError as e:
-        logger.error(f"Error saving audio file: {str(e)}")
         raise Exception(f"Failed to save audio file: {str(e)}")
 
-def process_transcription(fileUrl, local_filename): #Uncomment this when we get link
-# def process_transcription(fileUrl):
-    """
-    Main function to handle audio transcription and speaker diarization.
 
-    Args:
-        fileUrl (str): URL to download the audio
-        local_filename (str): Temporary filename to save audio
-
-    Returns:
-        dict: Transcription result containing speaker blocks and conversation
-    """
+def process_transcription(fileUrl, local_filename, jobId=None): 
     try:
-
-        download_audio(fileUrl, local_filename) #Uncomment this when we get link
-        audio = whisperx.load_audio(local_filename) #Uncomment this when we get link
-        # audio = whisperx.load_audio(fileUrl)
-
+        download_audio(fileUrl, local_filename, jobId)
+        audio = whisperx.load_audio(local_filename)
         model = whisperx.load_model("small", device="cpu", compute_type="float32")
-        # Transcribe the audio
         result = model.transcribe(audio, language="en")
-        
-        # Align segments
+
+        logger.info("Whisper Transcription Stage 1 completed", extra=get_log_context(jobId, fileUrl))
+
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device="cpu")
-        result = whisperx.align(result["segments"], model_a, metadata, audio, device="cpu",
-                                return_char_alignments=False)
+        result = whisperx.align(result["segments"], model_a, metadata, audio, device="cpu", return_char_alignments=False)
 
-        diarize_model = whisperx.diarize.DiarizationPipeline(
-            use_auth_token=hf_token,
-            device="cpu"
-        )
-
-        # Perform speaker diarization
+        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device="cpu")
         diarize_segments = diarize_model(audio)
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
-        # Convert to chronological conversation
         segments = sorted(result["segments"], key=lambda x: x["start"])
         conversation = [
             {"speaker": segment.get("speaker", "Unknown"), "text": segment.get("text", "").strip()}
             for segment in segments if segment.get("text", "").strip()
         ]
+
+        logger.info("Speaker Diarization completed", extra=get_log_context(jobId, fileUrl))
 
         return {
             "conversation": conversation,
@@ -141,32 +152,13 @@ def process_transcription(fileUrl, local_filename): #Uncomment this when we get 
         }
 
     except Exception as e:
-        logger.error(f"Transcription failed: {str(e)}")
         raise Exception(f"Transcription processing failed: {str(e)}")
-        
-    finally:  #Uncomment whole block this when we get link
-        try:
-            if os.path.exists(local_filename):
-                os.remove(local_filename)
-                logger.info(f"Cleaned up file {local_filename}")
-        except Exception as e:
-            logger.warning(f"Failed to delete temp file {local_filename}: {str(e)}")
 
 def format_speaker_blocks(segments):
-    """
-    Groups transcript segments by speaker.
-
-    Args:
-        segments (list): WhisperX segments with speaker labels
-
-    Returns:
-        dict: Mapping of speaker to their spoken text blocks
-    """
     content = {}
     for segment in segments:
         speaker = segment.get("speaker", "Unknown")
         content.setdefault(speaker, []).append(segment["text"])
-
     return {speaker: " ".join(lines) for speaker, lines in content.items()}
 
 def assign_speaker_roles(conversation):
@@ -181,50 +173,96 @@ def assign_speaker_roles(conversation):
     """
 
     system_prompt = ("""
-        You are an expert transcriber and editor. Your task is to take a raw sales call transcript between an EdTech **Counsellor** and a **Student**, clean it up, and format it for clarity and readability.
-        ## Your Specific Instructions:
+        You are an expert transcriber and editor. Your task is to take a raw sales call transcript generated by **Whisper transcription** between an EdTech **Counsellor** and a **Student**, clean it up, and format it for clarity and readability.
+
+        ---
+
+        ## STEP 1: Transcript Quality Check
+
+        First, assess whether the transcript is meaningful and processable.
+
+        If **any** of the following are true, consider the transcript **Unusable**:
+
+        - The content is **too noisy**, **gibberish**, or **completely broken**.
+        - The call contains **only a few disjointed or random words or short phrases** (e.g., "hello", "yeah", "okay", "thank you") with **no coherent context or factual content**.
+        - There is **no clear back-and-forth dialogue**, **no questions or answers**, and **no identifiable sales or academic discussion**.
+        - It is **not worth storing or analyzing further** due to poor quality or meaningless content.
+
+        In such cases, respond with **ONLY this string** (no JSON output):
+        "Unusable: Transcript quality is too poor and incoherent to process."
+
+
+        If the transcript is **usable**, proceed to STEP 2.
+
+        ---
+
+        ## STEP 2: Clean and Structure the Transcript
 
         ### Punctuation
+
         Add all necessary punctuation (periods, commas, question marks, etc.) to make sentences grammatically correct and easy to read.
+
         ### Grammar
-        Fix any grammatical errors, awkward phrasing, or incomplete sentences while preserving the original meaning.
+
+        Fix any grammatical errors, awkward phrasing, or incomplete sentences while preserving the original meaning.  
         **Important:** Do **not** make drastic changes or rewrite the content beyond necessary corrections.
+
         ### Filler Words
+
         Remove common filler words such as:
+
         - *um*, *uh*, *like*, *you know*, *basically*, *actually*, *so* (when used as a filler), *right* (when used as a filler), *I mean*
+
         ### Speaker Labels
+
         Each line must be clearly labeled as either **"Counsellor"** or **"Student"**. However, the input transcript may have **incorrect or missing speaker assignments**, so you must:
+
         - **Carefully analyze each line** to correctly determine the speaker based on content and intent.
         - **Reassign roles if they are incorrect**, using the following detailed context:
 
+        ---
+
         ## Role Identification Guidelines
+
         ### Counsellor
+
         - Represents the **EdTech company or University/College**.
         - Asks sales-oriented or qualification questions like:
-          - “What's your graduation year?”
-          - “Are you looking for a full-time or part-time course?”
+        - “What's your graduation year?”
+        - “Are you looking for a full-time or part-time course?”
         - Shares information about:
-          - Course offerings, fees, placements, payment options, program structures, deadlines.
-        - Tries to **guide or persuade** the student to take admission.
+        - Course offerings, fees, placements, payment options, program structure, deadlines.
+        - Attempts to **guide or persuade** the student to consider or take admission.
         - Often **initiates the conversation** and drives it forward.
+
         ### Student
-        - A **prospective learner** (or occasionally their parent/guardian).
-        - Typically asks **academic or admissions-related doubts** such as:
-          - “Is this course available online?”
-          - “What are the job opportunities?”
-          - “What is the fee structure?”
-        - Responds to questions about their background, interests, and preferences.
-        - May express hesitation or need more clarity before making a decision.
-        
+
+        - A **prospective learner** (or sometimes their parent, guardian, family member, or relative).
+        - Typically asks **academic or admissions-related questions** such as:
+        - “Is this course available online?”
+        - “What are the job opportunities?”
+        - “What is the fee structure?”
+        - Responds to questions about their background, interests, preferences, and availability.
+        - May express hesitation, confusion, or interest.
+
+        ---
+
         ## Important Notes on Input Quality
-        - **Expect speaker labels to be missing or inaccurate**. Your role includes **correcting them** wherever needed.
-        - Some parts may be **jumbled, misattributed, or fragmented**. Use contextual clues to make sensible assignments without assuming details not present in the transcript.
-        ## Output Format
-        Output only a **JSON list** (i.e., an array of objects). Each object must contain:
+
+        - Whisper transcripts may contain **missing speaker labels**, transcription artifacts, or repeated phrases — expect this and correct accordingly.
+        - Some parts may be **jumbled, misattributed, or fragmented**. Use contextual clues to make sensible speaker assignments.
+        - Do **not** add or assume any new content that wasn't present in the original transcript.
+
+        ---
+
+        ## STEP 3: Output Format (ONLY if the transcript is usable):
+
+        - Output only a **JSON list** (i.e., an array of objects). Each object must contain:
         - `"speaker"`: One of `"Counsellor"` or `"Student"`
         - `"text"`: The cleaned, properly punctuated transcript line.
 
         ### Example Output
+
         ```json
         [
             {
@@ -256,8 +294,10 @@ def assign_speaker_roles(conversation):
         response = llm.invoke(messages)
         
         response_text = response.content.strip()
-        logger.info(f"Raw response: {response_text}")
-        
+        # logger.info(f"Raw response: {response_text}")
+        if response_text.startswith("Unusable:"):
+            return response_text
+
         # Clean the response
         json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
         json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
@@ -268,11 +308,11 @@ def assign_speaker_roles(conversation):
             json_str = match.group()
         json_str = json.loads(json_str)
         return json_str
-        
+    
+    except json.JSONDecodeError as e:
+        raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
     except Exception as e:
-        logger.error(f"Cleaning and role assignment failed: {str(e)}")
-        logger.error(f"Raw response: {response_text if 'response_text' in locals() else 'N/A'}")
-        return {}
+        raise Exception(f"assign_speaker_roles and cleaning failed: {str(e)}")
 
 def summarize_transcript(conversation):
     """
@@ -288,9 +328,9 @@ def summarize_transcript(conversation):
     system_prompt = ("""
       You are an expert sales call analyst. Your task is to analyze the following EdTech sales call transcript between a 'Counsellor' and a 'Student' and produce a structured summary. Your summary must strictly cover the following four aspects:
 
-      1. **Interest Level:** Assess the student's level of interest in the EdTech offering (choose from: 'highly interested', 'moderately interested', 'undecided', 'low interest', or 'exploring options'). Include a brief justification based on the conversation.
+      1. **Interest Level:** Assess the student's level of interest in the EdTech offering (choose from: 'highly interested', 'moderately interested', 'undecided', 'low interest', or 'exploring options'). Include a justification based on the conversation.
 
-      2. **Questions Asked:** List the key questions or clarifications the student asked the counsellor—these may relate to the courses, curriculum, fees, admission process, career prospects, etc.
+      2. **Questions Asked:** List the key questions or clarifications ONLY asked by the student to the counsellor—these may relate to the courses, curriculum, fees, admission process, career prospects, etc. DO NOT include questions asked by the counsellor.
 
       3. **Objections:** Identify any concerns, hesitations, or objections raised by the student (e.g., cost concerns, lack of time, doubts about course fit, technical challenges).
 
@@ -326,7 +366,7 @@ def summarize_transcript(conversation):
         response = llm.invoke(messages)
         
         response_text = response.content.strip()
-        logger.info(f"Raw response: {response_text}")
+        # logger.info(f"Raw response: {response_text}")
         
         # Clean the response
         json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
@@ -340,6 +380,4 @@ def summarize_transcript(conversation):
         return json_str
         
     except Exception as e:
-        logger.error(f"Summary generation failed: {str(e)}")
-        logger.error(f"Raw response: {response_text if 'response_text' in locals() else 'N/A'}")
-        return {}
+        raise Exception(f"summarize_transcript failed: {str(e)}")
