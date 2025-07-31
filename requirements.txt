@@ -11,3 +11,4 @@ requests
 uuid
 sentence-transformers
 redis
+apscheduler
