@@ -5,7 +5,6 @@ import json, os
 from crew import run_qualification_agent, ValidationError
 import uuid
 import logging
-from transcription_async import process_transcription_async
 # from crew_async import process_qualification_async
 # import concurrent.futures
 from job_queue import job_queue
