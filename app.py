@@ -7,11 +7,12 @@ import uuid
 import logging
 from transcription_async import process_transcription_async
 # from crew_async import process_qualification_async
-import concurrent.futures
+# import concurrent.futures
 from job_queue import job_queue
+from log_cleanup_scheduler import start_log_cleanup_scheduler
 
 app = Flask(__name__)
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+# executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 SECURITY_HEADER = "X-SECURITY-TOKEN"
 SECURITY_TOKEN = os.environ.get("SECURITY_TOKEN")
@@ -144,4 +145,5 @@ def transcribe():
 
 
 if __name__ == "__main__":
+    start_log_cleanup_scheduler()
     app.run(debug=True, port=5000, host="0.0.0.0")
