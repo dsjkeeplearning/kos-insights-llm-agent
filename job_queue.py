@@ -1,6 +1,6 @@
 # job_queue.py
 import threading, queue, requests, redis, time, json
-from transcription import handle_transcription_request
+from transcription_gpu import handle_transcription_request
 import os
 from logging_config import logger
 
