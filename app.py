@@ -2,7 +2,7 @@
 #type:ignore
 from flask import Flask, request, Response, jsonify
 import json, os
-from crew import run_qualification_agent, ValidationError
+# from crew import run_qualification_agent, ValidationError
 import uuid
 import logging
 # from crew_async import process_qualification_async
