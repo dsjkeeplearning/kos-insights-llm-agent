@@ -1,37 +1,53 @@
 # job_queue.py
-import threading, queue, logging, requests, redis, time, json
+import threading, queue, requests, redis, time, json
 from transcription import handle_transcription_request
+import os
+from logging_config import logger
 
 # In-memory job queue with max size
 job_queue = queue.Queue(maxsize=100)
 
 # Redis setup
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
 NUM_WORKERS = 4
 WEBHOOK_RETRY_LIST = "pending_webhooks"
+SECURITY_TOKEN = os.environ.get("SECURITY_TOKEN")
+
+def get_log_context(jobId=None, fileUrl=None):
+    return {
+        "jobId": jobId or "UNKNOWN",
+        "fileUrl": fileUrl or "UNKNOWN"
+    }
 
 def worker():
     while True:
         try:
             webhook_url, data = job_queue.get()
-            job_id = data["jobId"]
+            jobId = data.get("jobId")
+            fileUrl = data.get("fileUrl")
             result = handle_transcription_request(data)
 
             # Save result to Redis
-            redis_key = f"transcription:{job_id}"
+            redis_key = f"transcription:{jobId}"
             redis_client.set(redis_key, json.dumps(result), ex=86400)  # 24h TTL
+            logger.info(f"[Worker] Saved result to Redis", extra=get_log_context(jobId, fileUrl))
 
             # Try sending to webhook
-            response = requests.post(webhook_url, json=result, headers={"Content-Type": "application/json"})
+            headers = {
+                "Content-Type": "application/json",
+                "X-SECURITY-TOKEN": SECURITY_TOKEN
+            }
+            response = requests.post(webhook_url, json=result, headers=headers)
 
             if response.status_code == 200:
                 redis_client.delete(redis_key)
+                logger.info(f"[Worker] Successfully posted to webhook", extra=get_log_context(jobId, fileUrl))
             else:
-                schedule_retry(job_id, webhook_url, initial_delay=5)
+                schedule_retry(jobId, webhook_url, initial_delay=5)
 
         except Exception as e:
-            logging.exception(f"[Worker] Error processing job: {e}")
+            logger.exception(f"[Worker] Error processing job: {e}", extra=get_log_context(jobId, fileUrl))
             try:
                 schedule_retry(data.get("jobId"), webhook_url, initial_delay=5)
             except:
@@ -53,21 +69,25 @@ def webhook_retry_worker():
         all_items = redis_client.lrange(WEBHOOK_RETRY_LIST, 0, -1)
         for item in all_items:
             data = json.loads(item)
-            job_id = data["jobId"]
+            jobId = data["jobId"]
             webhook_url = data["webhookUrl"]
             attempts = data["attempts"]
             next_retry = data["next_retry"]
 
             if time.time() >= next_retry:
-                result = redis_client.get(f"transcription:{job_id}")
+                result = redis_client.get(f"transcription:{jobId}")
                 if result is None:
                     redis_client.lrem(WEBHOOK_RETRY_LIST, 0, item)
                     continue
 
                 try:
-                    resp = requests.post(webhook_url, json=json.loads(result), headers={"Content-Type": "application/json"})
+                    headers = {
+                        "Content-Type": "application/json",
+                        "X-SECURITY-TOKEN": SECURITY_TOKEN
+                    }
+                    resp = requests.post(webhook_url, json=json.loads(result), headers=headers)
                     if resp.status_code == 200:
-                        redis_client.delete(f"transcription:{job_id}")
+                        redis_client.delete(f"transcription:{jobId}")
                         redis_client.lrem(WEBHOOK_RETRY_LIST, 0, item)
                     else:
                         if attempts < 10:  # ~24h if exponential
@@ -78,7 +98,7 @@ def webhook_retry_worker():
                         else:
                             redis_client.lrem(WEBHOOK_RETRY_LIST, 0, item)
                 except Exception as e:
-                    logging.error(f"[RetryWorker] Failed to send job {job_id}: {e}")
+                    logger.error(f"[RetryWorker] Failed to send job: {e}", extra=get_log_context(jobId))
         time.sleep(10)
 
 # Launch transcription workers
