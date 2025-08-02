@@ -166,16 +166,29 @@ def status():
     }), 200
 
 
-if __name__ == "__main__":
+
+
+def initialize_service():
+    """Run startup checks and log system readiness."""
     logger.info("🚀 Starting LLM Agent Service...")
     logger.info("🟢 Initializing log cleanup scheduler")
     start_log_cleanup_scheduler()
-    logger.info("🟢 Redis connection initialized: %s", redis_client.ping())
+    try:
+        logger.info("🟢 Redis connection initialized: %s", redis_client.ping())
+    except Exception as e:
+        logger.error(f"❌ Redis connection failed: {e}")
     log_gpu_info()
     model_status = get_model_status()
     if model_status["loaded"]:
         logger.info(f"🟢 WhisperX model '{model_status['model_name']}' loaded successfully on {model_status['device']} (CUDA available: {model_status['cuda_available']})")
     else:
         logger.error(f"❌ Failed to load WhisperX model '{model_status['model_name']}' on {model_status['device']} (CUDA available: {model_status['cuda_available']})")
+
+
+# Always run initialization (for both Gunicorn and direct execution)
+initialize_service()
+
+
+if __name__ == "__main__":
     logger.info("🟢 Flask app is running on http://0.0.0.0:5000")
     app.run(debug=False, port=5000, host="0.0.0.0")
