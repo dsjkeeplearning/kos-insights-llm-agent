@@ -20,21 +20,57 @@ hf_token = os.getenv("HF_AUTH_TOKEN")
 if not hf_token:
     logger.warning("HF_AUTH_TOKEN not set. Diarization may fail or be limited.")
 
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY").strip()
+
+# Helper: Return WhisperX model status, model name, device, and CUDA availability
+def get_model_status():
+    """
+    Returns WhisperX model load status with model name, device, and CUDA availability.
+    Adds robustness if env vars or models are missing.
+    """
+    cuda_available = torch.cuda.is_available()
+    # Defensive: Use defaults if not set
+    model_name = whisper_model_name if 'whisper_model_name' in globals() and whisper_model_name else "unknown"
+    device = model_device if model_device else ("cuda" if cuda_available else "cpu")
+    return {
+        "loaded": all([
+            'whisper_model_instance' in globals() and whisper_model_instance,
+            'align_model' in globals() and align_model,
+            'align_metadata' in globals() and align_metadata,
+            'diarization_pipeline' in globals() and diarization_pipeline
+        ]),
+        "model_name": model_name,
+        "device": device,
+        "cuda_available": cuda_available
+    }
+
+openai_key = os.getenv("OPENAI_API_KEY")
+if not openai_key:
+    logger.error("❌ OPENAI_API_KEY not set. LLM features may not work.")
+    openai_key = ""
+else:
+    openai_key = openai_key.strip()
+
 llm = ChatOpenAI(
    model="gpt-4o-mini",
    temperature=0.3,
-   api_key=os.environ["OPENAI_API_KEY"]
+   api_key=openai_key
 )
 
 # Load WhisperX models globally after env vars are loaded
 whisper_model_name = os.getenv("WHISPER_MODEL")
 model_device = os.getenv("MODEL_DEVICE")
-logger.info(f"Loading WhisperX model {whisper_model_name} on device {model_device}...")
+cuda_available = torch.cuda.is_available()
+if model_device and model_device.lower() == "cuda" and not cuda_available:
+    logger.warning("MODEL_DEVICE is set to 'cuda' but CUDA is not available. Falling back to 'cpu'.")
+    model_device = "cpu"
+logger.info(f"Loading WhisperX model '{whisper_model_name}' on device '{model_device}'...")
 try:
     whisper_model_instance = whisperx.load_model(whisper_model_name, device=model_device, compute_type="default")
+    logger.info("🟢 Whisper model loaded successfully.")
     align_model, align_metadata = whisperx.load_align_model(language_code="en", device=model_device)
+    logger.info("🟢 Alignment model loaded successfully.")
     diarization_pipeline = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=model_device)
+    logger.info("🟢 Diarization pipeline initialized successfully.")
 except Exception as e:
     logger.error(f"Failed to load WhisperX models: {e}")
     whisper_model_instance, align_model, align_metadata, diarization_pipeline = None, None, None, None

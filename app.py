@@ -8,11 +8,39 @@ from job_queue import job_queue, get_job_status
 # from crew import run_qualification_agent, ValidationError
 import uuid
 from version import __version__
+# from crew_async import process_qualification_async
+# import concurrent.futures
+
 import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 # from crew_async import process_qualification_async
 # import concurrent.futures
 
 from log_cleanup_scheduler import start_log_cleanup_scheduler
+
+from transcription_gpu import get_model_status
+
+
+def log_gpu_info():
+    """Logs GPU presence, driver version, and GPU names using nvidia-smi."""
+    try:
+        output = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+            text=True
+        )
+        lines = output.strip().splitlines()
+        if not lines:
+            logger.warning("⚠️ No GPUs detected by nvidia-smi.")
+            return
+        for idx, line in enumerate(lines):
+            name, driver = [part.strip() for part in line.split(",")]
+            logger.info(f"🟢 GPU {idx}: {name}, Driver Version: {driver}")
+    except FileNotFoundError:
+        logger.error("❌ nvidia-smi not found. NVIDIA driver may not be installed.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Failed to query GPU info: {e}")
 
 # Redis client for status checks
 app = Flask(__name__)
@@ -36,6 +64,8 @@ SECURITY_TOKEN = os.environ.get("SECURITY_TOKEN")
 
 if SECURITY_TOKEN is None:
     raise RuntimeError("SECURITY_TOKEN environment variable must be set")
+
+logger.info("✅ SECURITY_TOKEN found and validated")
 
 @app.before_request
 def require_security_header():
@@ -137,5 +167,15 @@ def status():
 
 
 if __name__ == "__main__":
+    logger.info("🚀 Starting LLM Agent Service...")
+    logger.info("🟢 Initializing log cleanup scheduler")
     start_log_cleanup_scheduler()
+    logger.info("🟢 Redis connection initialized: %s", redis_client.ping())
+    log_gpu_info()
+    model_status = get_model_status()
+    if model_status["loaded"]:
+        logger.info(f"🟢 WhisperX model '{model_status['model_name']}' loaded successfully on {model_status['device']} (CUDA available: {model_status['cuda_available']})")
+    else:
+        logger.error(f"❌ Failed to load WhisperX model '{model_status['model_name']}' on {model_status['device']} (CUDA available: {model_status['cuda_available']})")
+    logger.info("🟢 Flask app is running on http://0.0.0.0:5000")
     app.run(debug=True, port=5000, host="0.0.0.0")
