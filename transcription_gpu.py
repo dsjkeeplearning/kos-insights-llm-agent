@@ -8,6 +8,7 @@ import re
 import json
 from langchain_openai import ChatOpenAI
 from logging_config import logger
+import time
 import torch
 
 load_dotenv()
@@ -24,12 +25,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # Attempt to get Hugging Face auth token from environment variable
 hf_token = os.getenv("HF_AUTH_TOKEN")
 
-def get_log_context(jobId=None, fileUrl=None):
-    return {
-        "jobId": jobId or "UNKNOWN",
-        "fileUrl": fileUrl or "UNKNOWN"
-    }
-
 def handle_transcription_request(data):
     """
     Parses input JSON and processes the transcription request.
@@ -45,34 +40,37 @@ def handle_transcription_request(data):
         fileUrl = data.get("fileUrl") 
         local_filename = f"audio_{uuid.uuid4().hex}.mp3"
 
-        logger.info("Transcription job received", extra=get_log_context(jobId, fileUrl))
-
-        result = process_transcription(fileUrl, local_filename, jobId)
+        logger.info(f"Transcription job received for jobId: {jobId}")
+        start_total_time = time.monotonic()
+        result, audio_duration_seconds = process_transcription(fileUrl, local_filename)
 
         try:
             # MODIFIED: Check if the returned value is the "Unusable" string
             cleaned_or_unusable_string = assign_speaker_roles(result["conversation"])
             if isinstance(cleaned_or_unusable_string, str) and cleaned_or_unusable_string.startswith("Unusable:"):
-                logger.info(f"Transcript rejected", extra=get_log_context(jobId, fileUrl))
+                end_total_time = time.monotonic()
+                total_processing_time = end_total_time - start_total_time
+                logger.info(f"Transcript rejected for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {total_processing_time:.2f}s")
                 return {
                     "jobId": jobId,
                     "status": "REJECTED",
                     "reason": cleaned_or_unusable_string
                 }
             cleaned = cleaned_or_unusable_string # Assign to 'cleaned' if not rejected
-            logger.info("Cleaning and speaker roles assigned successfully", extra=get_log_context(jobId, fileUrl))
+            logger.debug("Cleaning and speaker roles assigned successfully")
         except Exception as e:
-            logger.error("Error assigning speaker roles and cleaning", extra=get_log_context(jobId, fileUrl))
+            logger.error("Error assigning speaker roles and cleaning")
             raise
         
         try:
             summary = summarize_transcript(cleaned)
-            logger.info("Summary generated successfully", extra=get_log_context(jobId, fileUrl))
+            logger.debug("Summary generated successfully")
         except Exception as e:
-            logger.error("Error during transcript summarization", extra=get_log_context(jobId, fileUrl))
+            logger.error("Error during transcript summarization")
             raise
-
-        logger.info("Transcription job completed", extra=get_log_context(jobId, fileUrl))
+        end_total_time = time.monotonic()
+        total_processing_time = end_total_time - start_total_time
+        logger.info(f"Transcription job completed for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {total_processing_time:.2f}s")
 
         return {
             "jobId": jobId,
@@ -82,7 +80,7 @@ def handle_transcription_request(data):
         }
 
     except Exception as e:
-        logger.error(f"Failed to handle transcription request. Error: {str(e)}", extra=get_log_context(jobId, fileUrl))
+        logger.error(f"Failed to handle transcription request. Error: {str(e)}")
         return {
             "jobId": jobId,
             "status": "FAILED",
@@ -93,12 +91,12 @@ def handle_transcription_request(data):
         if local_filename and os.path.exists(local_filename):
             try:
                 os.remove(local_filename)
-                logger.info(f"Cleaned up file {local_filename}", extra=get_log_context(jobId, fileUrl))
+                logger.debug(f"Cleaned up local file")
             except Exception as e:
-                logger.warning(f"Failed to delete temp file {local_filename}: {str(e)}", extra=get_log_context(jobId, fileUrl))
+                logger.warning(f"Failed to delete temp file {local_filename}: {str(e)}")
         torch.cuda.empty_cache()
 
-def download_audio(audio_url, local_filename, jobId=None):
+def download_audio(audio_url, local_filename):
     try:
         with requests.get(audio_url, stream=True, timeout=20, allow_redirects=True) as r:
             r.raise_for_status()
@@ -112,8 +110,6 @@ def download_audio(audio_url, local_filename, jobId=None):
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-        logger.info(f"Downloaded audio to {local_filename}", extra=get_log_context(jobId, audio_url))
-
     except requests.exceptions.Timeout as e:
         raise Exception(f"Download failed: Timeout occurred: {str(e)}")
     except requests.exceptions.TooManyRedirects as e:
@@ -124,19 +120,23 @@ def download_audio(audio_url, local_filename, jobId=None):
         raise Exception(f"Failed to save audio file: {str(e)}")
 
 
-def process_transcription(fileUrl, local_filename, jobId=None): 
+def process_transcription(fileUrl, local_filename): 
     try:
-        download_audio(fileUrl, local_filename, jobId)
+        download_audio(fileUrl, local_filename)
         audio = whisperx.load_audio(local_filename)
-        model = whisperx.load_model("small", device="cuda", compute_type="default")
+        audio_duration_seconds = len(audio) / 16000 
+
+        whisper_model = os.getenv("WHISPER_MODEL")
+        model_device = os.getenv("MODEL_DEVICE")
+        model = whisperx.load_model(whisper_model, device=model_device, compute_type="default")
         result = model.transcribe(audio, language="en")
 
-        logger.info("Whisper Transcription Stage 1 completed", extra=get_log_context(jobId, fileUrl))
+        logger.debug("Whisper Transcription Stage 1 completed")
 
-        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device="cuda")
-        result = whisperx.align(result["segments"], model_a, metadata, audio, device="cuda", return_char_alignments=False)
+        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=model_device)
+        result = whisperx.align(result["segments"], model_a, metadata, audio, device=model_device, return_char_alignments=False)
 
-        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device="cuda")
+        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=model_device)
         diarize_segments = diarize_model(audio)
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
@@ -146,15 +146,15 @@ def process_transcription(fileUrl, local_filename, jobId=None):
             for segment in segments if segment.get("text", "").strip()
         ]
 
-        logger.info("Speaker Diarization completed", extra=get_log_context(jobId, fileUrl))
+        logger.debug("Speaker Diarization completed")
 
         return {
             "conversation": conversation,
             "speaker_blocks": format_speaker_blocks(segments)
-        }
+        }, audio_duration_seconds
 
     except Exception as e:
-        raise Exception(f"Transcription processing failed: {str(e)}")
+        raise Exception(f"Transcription and Diarization failed: {str(e)}")
 
 def format_speaker_blocks(segments):
     content = {}
@@ -177,13 +177,12 @@ def assign_speaker_roles(conversation):
     system_prompt = ("""
         You are an expert transcriber and editor. Your task is to take a raw sales call transcript generated by **Whisper transcription** between an EdTech **Counsellor** and a **Student**, clean it up, and format it for clarity and readability.
 
-        ---
-
         ## STEP 1: Transcript Quality Check
 
         First, assess whether the transcript is meaningful and processable.
 
-        If **any** of the following are true, consider the transcript **Unusable**:
+        DO NOT BE TOO STRICT IN YOUR EVALUATION.
+        IF YOU FIND ALL OF THE FOLLOWING TO BE TRUE, CONSIDER THE TRANSCRIPT **UNUSABLE**:
 
         - The content is **too noisy**, **gibberish**, or **completely broken**.
         - The call contains **only a few disjointed or random words or short phrases** (e.g., "hello", "yeah", "okay", "thank you") with **no coherent context or factual content**.
@@ -192,7 +191,6 @@ def assign_speaker_roles(conversation):
 
         In such cases, respond with **ONLY this string** (no JSON output):
         "Unusable: Transcript quality is too poor and incoherent to process."
-
 
         If the transcript is **usable**, proceed to STEP 2.
 
@@ -217,7 +215,7 @@ def assign_speaker_roles(conversation):
 
         ### Speaker Labels
 
-        Each line must be clearly labeled as either **"Counsellor"** or **"Student"**. However, the input transcript may have **incorrect or missing speaker assignments**, so you must:
+        Each line must be clearly labeled as either **"Counsellor"** or **"Student"**. The input transcript might have **incorrect or misattributed** speaker assignments**, so you must:
 
         - **Carefully analyze each line** to correctly determine the speaker based on content and intent.
         - **Reassign roles if they are incorrect**, using the following detailed context:
@@ -228,7 +226,8 @@ def assign_speaker_roles(conversation):
 
         ### Counsellor
 
-        - Represents the **EdTech company or University/College**.
+        - Represents the **EdTech company or University/College/Institution**.
+        - Introduces themselves as a representative from the particular institution.
         - Asks sales-oriented or qualification questions like:
         - “What's your graduation year?”
         - “Are you looking for a full-time or part-time course?”
@@ -296,7 +295,7 @@ def assign_speaker_roles(conversation):
         response = llm.invoke(messages)
         
         response_text = response.content.strip()
-        # logger.info(f"Raw response: {response_text}")
+        
         if response_text.startswith("Unusable:"):
             return response_text
 
@@ -368,7 +367,6 @@ def summarize_transcript(conversation):
         response = llm.invoke(messages)
         
         response_text = response.content.strip()
-        # logger.info(f"Raw response: {response_text}")
         
         # Clean the response
         json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)

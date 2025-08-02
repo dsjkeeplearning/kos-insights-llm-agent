@@ -37,17 +37,25 @@ def clean_old_log_files(log_dir="logs", days=7, prefix="transcription-"):
 
 # --- LOGGER SETUP ---
 logger = logging.getLogger("transcription_logger")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG) # Set the base level for the logger to DEBUG
 
 if not logger.handlers:
-    formatter = logging.Formatter(
-        '%(asctime)s - jobId=%(jobId)s - fileUrl=%(fileUrl)s - %(levelname)s - %(message)s',
+    # Formatter for file logs (no jobId, fileUrl)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     file_handler = logging.FileHandler(LOG_FILE)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(logging.INFO) # Only INFO and higher go to file
     logger.addHandler(file_handler)
 
+    # Formatter for stream logs (no jobId, fileUrl)
+    stream_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
+    stream_handler.setFormatter(stream_formatter)
+    stream_handler.setLevel(logging.DEBUG) # All DEBUG and higher go to stream
     logger.addHandler(stream_handler)

@@ -10,28 +10,21 @@ job_queue = queue.Queue(maxsize=100)
 # Redis setup
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
-NUM_WORKERS = 4
+NUM_WORKERS = 2
 WEBHOOK_RETRY_LIST = "pending_webhooks"
 SECURITY_TOKEN = os.environ.get("SECURITY_TOKEN")
-
-def get_log_context(jobId=None, fileUrl=None):
-    return {
-        "jobId": jobId or "UNKNOWN",
-        "fileUrl": fileUrl or "UNKNOWN"
-    }
 
 def worker():
     while True:
         try:
             webhook_url, data = job_queue.get()
             jobId = data.get("jobId")
-            fileUrl = data.get("fileUrl")
             result = handle_transcription_request(data)
 
             # Save result to Redis
             redis_key = f"transcription:{jobId}"
             redis_client.set(redis_key, json.dumps(result), ex=86400)  # 24h TTL
-            logger.info(f"[Worker] Saved result to Redis", extra=get_log_context(jobId, fileUrl))
+            logger.debug(f"[Worker] Saved result to Redis for jobId")
 
             # Try sending to webhook
             headers = {
@@ -42,12 +35,12 @@ def worker():
 
             if response.status_code == 200:
                 redis_client.delete(redis_key)
-                logger.info(f"[Worker] Successfully posted to webhook", extra=get_log_context(jobId, fileUrl))
+                logger.info(f"[Worker] Successfully posted to webhook for jobId: {jobId}")
             else:
                 schedule_retry(jobId, webhook_url, initial_delay=5)
 
         except Exception as e:
-            logger.exception(f"[Worker] Error processing job: {e}", extra=get_log_context(jobId, fileUrl))
+            logger.exception(f"[Worker] Error processing job: {e}")
             try:
                 schedule_retry(data.get("jobId"), webhook_url, initial_delay=5)
             except:
@@ -98,7 +91,7 @@ def webhook_retry_worker():
                         else:
                             redis_client.lrem(WEBHOOK_RETRY_LIST, 0, item)
                 except Exception as e:
-                    logger.error(f"[RetryWorker] Failed to send job: {e}", extra=get_log_context(jobId))
+                    logger.error(f"[RetryWorker] Failed to send job: {e}")
         time.sleep(10)
 
 # Launch transcription workers
