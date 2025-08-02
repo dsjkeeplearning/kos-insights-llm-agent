@@ -7,6 +7,7 @@ import redis
 from job_queue import job_queue, get_job_status
 # from crew import run_qualification_agent, ValidationError
 import uuid
+from version import __version__
 import logging
 # from crew_async import process_qualification_async
 # import concurrent.futures
@@ -123,6 +124,7 @@ def status():
         overall_status = "SAFE"
 
     return jsonify({
+        "version": __version__,
         "status": overall_status,
         "gpu_busy": gpu_busy,
         "redis_job_counts": {
