@@ -12,6 +12,9 @@ os.makedirs(LOG_DIR, exist_ok=True)
 today_str = datetime.now().strftime("%Y-%m-%d")
 LOG_FILE = os.path.join(LOG_DIR, f"transcription-{today_str}.log")
 
+# Log retention period (in days)
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "7"))
+
 # --- CLEANUP FUNCTION ---
 def clean_old_log_files(log_dir="logs", days=7, prefix="transcription-"):
     """
@@ -33,6 +36,13 @@ def clean_old_log_files(log_dir="logs", days=7, prefix="transcription-"):
                     print(f"Deleted old log: {filename}")
             except ValueError:
                 continue  # Skip malformed date formats
+
+
+# --- CLEANUP OLD LOGS ON STARTUP ---
+try:
+    clean_old_log_files(log_dir=LOG_DIR, days=LOG_RETENTION_DAYS)
+except Exception as e:
+    print(f"Warning: Failed to clean old logs: {e}")
 
 
 # --- LOGGER SETUP ---

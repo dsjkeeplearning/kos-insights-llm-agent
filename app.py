@@ -178,4 +178,4 @@ if __name__ == "__main__":
     else:
         logger.error(f"❌ Failed to load WhisperX model '{model_status['model_name']}' on {model_status['device']} (CUDA available: {model_status['cuda_available']})")
     logger.info("🟢 Flask app is running on http://0.0.0.0:5000")
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    app.run(debug=False, port=5000, host="0.0.0.0")
