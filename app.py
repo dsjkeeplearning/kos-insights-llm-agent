@@ -1,16 +1,33 @@
 # app.py
 #type:ignore
 from flask import Flask, request, Response, jsonify
-import json, os
+import json, os, subprocess
+# from crew import run_qualification_agent, ValidationError
+import redis
+from job_queue import job_queue, get_job_status
 # from crew import run_qualification_agent, ValidationError
 import uuid
 import logging
 # from crew_async import process_qualification_async
 # import concurrent.futures
-from job_queue import job_queue
+
 from log_cleanup_scheduler import start_log_cleanup_scheduler
 
+# Redis client for status checks
 app = Flask(__name__)
+redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+
+def is_gpu_busy():
+    """Check if GPU has active processes."""
+    try:
+        output = subprocess.check_output(
+            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+            text=True
+        )
+        running_pids = [line.strip() for line in output.splitlines() if line.strip()]
+        return len(running_pids) > 0
+    except Exception:
+        return False
 # executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 SECURITY_HEADER = "X-SECURITY-TOKEN"
@@ -25,7 +42,7 @@ def require_security_header():
     if token != SECURITY_TOKEN:
         error_msg = {"error": "Unauthorized: Missing or invalid security token"}
         return Response(json.dumps(error_msg), mimetype='application/json', status=401)
-    
+
 
 @app.route("/qualify_lead", methods=["POST"])
 def qualify_lead():
@@ -77,6 +94,44 @@ def transcribe():
             "status": "FAILED",
             "error": str(e)
         }), 500
+
+
+# Endpoint to check system status for safe shutdown
+@app.route('/status', methods=['GET'])
+def status():
+    """
+    Request: GET /status (requires X-SECURITY-TOKEN header)
+    Response JSON:
+    {
+      "status": "SAFE" | "BUSY",
+      "gpu_busy": bool,
+      "redis_job_counts": {
+         "active_jobs": int,
+         "pending_webhooks": int,
+         "transcription_keys": int
+      },
+      "in_memory_queue_size": int
+    }
+    """
+    gpu_busy = is_gpu_busy()
+    job_counts = get_job_status()
+    redis_busy = (job_counts["pending_webhooks"] > 0) or (job_counts["transcription_keys"] > 0) or (job_counts["active_jobs"] > 0)
+
+    if gpu_busy or redis_busy or job_counts["in_memory_queue_size"] > 0:
+        overall_status = "BUSY"
+    else:
+        overall_status = "SAFE"
+
+    return jsonify({
+        "status": overall_status,
+        "gpu_busy": gpu_busy,
+        "redis_job_counts": {
+            "active_jobs": job_counts["active_jobs"],
+            "pending_webhooks": job_counts["pending_webhooks"],
+            "transcription_keys": job_counts["transcription_keys"]
+        },
+        "in_memory_queue_size": job_counts["in_memory_queue_size"]
+    }), 200
 
 
 if __name__ == "__main__":

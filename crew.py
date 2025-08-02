@@ -13,15 +13,24 @@ from qdrant_client import QdrantClient, models # Import Qdrant client and models
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore # Assuming this is the class you're using
-import tiktoken #for token calculation 
+import tiktoken # for token calculation
+import logging
 
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 load_dotenv()
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY").strip()
-# Corrected: removed space from environment variable name
-os.environ["QDRANT_API_KEY"] = os.getenv("QDRANT_API_KEY").strip()
-os.environ["QDRANT_URL"] = os.getenv("QDRANT_URL").strip()
+logger = logging.getLogger(__name__)
+
+def safe_getenv(key):
+    val = os.getenv(key)
+    if not val:
+        logger.warning(f"Environment variable {key} is missing or empty.")
+        return ""
+    return val.strip()
+
+os.environ["OPENAI_API_KEY"] = safe_getenv("OPENAI_API_KEY")
+os.environ["QDRANT_API_KEY"] = safe_getenv("QDRANT_API_KEY")
+os.environ["QDRANT_URL"] = safe_getenv("QDRANT_URL")
 
 
 # Define LLM
@@ -31,19 +40,14 @@ llm = ChatOpenAI(
    api_key=os.environ["OPENAI_API_KEY"]
 )
 
-# --- Define UUIDs and Mapping (Global Scope) ---
-JAGSOM_UUID = "55481c47-78a1-4817-b1c1-f6460f37527d"
-VIJAYBHOOMI_UUID = "7790b5ce-6a38-47eb-ae27-eceb02b30318"
-IFIM_UUID = "c2773d5f-338f-402e-9467-027083b82e3c"
-KEDGE_UUID = "1b4a0f43-3946-40c4-aca7-01deeac10c00"
-KL_UUID = "fd16c9fd-3b5f-4505-8972-914f61190486"
-
-# Mapping institute_id to Qdrant collection names (Global Scope)
-INSTITUTE_COLLECTION_MAPPING = {
-    JAGSOM_UUID: "jagsom",
-    VIJAYBHOOMI_UUID: "vu",
-    IFIM_UUID: "ifim"
-}
+# --- Load Institute Mapping (External Only) ---
+mapping_file = os.getenv("INSTITUTE_MAPPING_FILE", "institute_mapping.json")
+try:
+    with open(mapping_file, "r") as f:
+        INSTITUTE_COLLECTION_MAPPING = json.load(f)
+        logger.info(f"Loaded institute mapping from {mapping_file}")
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    raise RuntimeError(f"Missing or invalid institute mapping file: {mapping_file}. Error: {e}")
 
 # Initialize Qdrant Client
 qdrant_client = QdrantClient(
@@ -89,14 +93,14 @@ import tiktoken
 
 def handle_token_overflow(payload: dict, model_name: str = "gpt-4o-mini") -> dict | None:
     encoding = tiktoken.encoding_for_model(model_name)
-    
+
     # Extract core message and channel
     message_text = payload["message"]["message"]
     channel = payload["message"]["channel"].upper()
     lead_name = next((f["value"] for f in payload["lead_field_values"] if f["field"] == "name"), "there")
 
     token_count = len(encoding.encode(message_text))
-    
+
     if token_count > 2000:
         if channel == "EMAIL":
             message_to_send = (
@@ -182,6 +186,17 @@ def initialize_state(input_json: dict) -> AgentState: #Retrieves values from Age
 
 def process_message_node(state: AgentState, max_retries: int = 3) -> AgentState:
     message_content = state.input_json.get("message", {}).get("message", "")
+    overflow_result = handle_token_overflow(state.input_json)
+    if overflow_result:
+        logger.warning("Token overflow detected, using fallback response.")
+        state.actions_from_llm = [{
+            "channel": state.input_json.get("message", {}).get("channel", "WHATSAPP"),
+            "content": overflow_result["message_to_send"],
+            "scheduled_time": (datetime.now() + timedelta(minutes=3)).strftime("%Y-%m-%dT%H:%M:%S+05:30"),
+            "note": "Fallback due to token overflow",
+            "conversation_id": state.input_json.get("message", {}).get("conversation_id", "")
+        }]
+        return state
 
     intent_prompt = ChatPromptTemplate.from_messages([
         ("system", """You are an expert AI assistant designed to classify user messages for an EdTech CRM.
@@ -214,31 +229,30 @@ def process_message_node(state: AgentState, max_retries: int = 3) -> AgentState:
             })
 
             # The raw LLM output printing is now less necessary here as structured_llm abstracts it,
-            # but you can still add a print for the parsed result if needed:
-            print(f"\n--- DEBUG: Parsed Intent Classification Result (Attempt {attempt + 1}) ---\n{classification_result.model_dump_json(indent=2)}\n--- End Parsed Result ---\n")
+            logger.debug(f"Parsed Intent Classification Result (Attempt {attempt + 1}): {classification_result.model_dump_json(indent=2)}")
 
             state.message_intent = classification_result.intent
 
             state.requires_counsellor = (state.message_intent == "counsellor_request")
-            state.inappropriate_message = (state.message_intent == "inappropriate_message") 
-            state.immediate_joining = (state.message_intent == "immediate_joining") 
-            
+            state.inappropriate_message = (state.message_intent == "inappropriate_message")
+            state.immediate_joining = (state.message_intent == "immediate_joining")
+
             return state # Successfully classified, exit loop
 
         except PydanticValidationError as e:
             error_msg = f"LLM output validation error (Pydantic, attempt {attempt + 1}/{max_retries}): {e}"
-            print(f"!!! {error_msg}")
+            logger.error(error_msg)
             # state.notes.append(error_msg)
             # Do not return yet, allow retry
         except Exception as e:
             error_msg = f"Error during LLM intent classification (attempt {attempt + 1}/{max_retries}): {e}"
-            print(f"!!! {error_msg}")
+            logger.error(error_msg)
             # state.notes.append(error_msg)
             # Do not return yet, allow retry
 
     # If all retries fail
     state.message_intent = "general_query"
-    print("LLM intent classification failed after all retries. Defaulting to 'general_query'.")
+    logger.error("LLM intent classification failed after all retries. Defaulting to 'general_query'.")
     return state
 
 
@@ -246,23 +260,24 @@ def retrieve_context_node(state: AgentState, max_retries: int = 3) -> AgentState
     message_content = state.input_json.get("message", {}).get("message", "")
     institute_id = state.institute_id
 
-    # Add this print statement to see what message content and institute ID are being used
-    print(f"\n--- RAG Retrieval Debug ---")
-    print(f"Message content for RAG: '{message_content}'")
-    print(f"Institute ID for RAG: '{institute_id}'")
+    # Debug logging for message content and institute ID
+    logger.debug(f"--- RAG Retrieval Debug ---")
+    logger.debug(f"Message content for RAG: '{message_content}'")
+    logger.debug(f"Institute ID for RAG: '{institute_id}'")
 
     # Use the logic from your institute_tools function to get the collection name
     collection_name = INSTITUTE_COLLECTION_MAPPING.get(institute_id)
 
-    # Add this print statement to confirm the resolved collection name
-    print(f"Resolved Qdrant collection name: '{collection_name}'")
+    # Debug logging for resolved collection name
+    logger.debug(f"Resolved Qdrant collection name: '{collection_name}'")
 
     if not collection_name:
         # Handle case where institute_id might not be mapped
         error_note = f"Error: No Qdrant collection mapped for institute_id: {institute_id}"
         # state.notes.append(error_note)
-        state.retrieved_context = [] #output we are getting from RAG node (top K=3 chunks)
-        print(error_note) # Also print for immediate debugging
+        state.retrieved_context = []
+        logger.error(error_note)
+        state.escalate_to_human = True
         return state
 
     try:
@@ -278,22 +293,23 @@ def retrieve_context_node(state: AgentState, max_retries: int = 3) -> AgentState
         retrieved_docs: List[Document] = vector_store.similarity_search(message_content, k=5)
         state.retrieved_context = [doc.page_content for doc in retrieved_docs] #output we are getting from RAG node (top K=5 chunks)
 
-        # Add these print statements to see what was retrieved
-        print(f"Number of retrieved documents: {len(state.retrieved_context)}")
+        # Debug logging for what was retrieved
+        logger.debug(f"Number of retrieved documents: {len(state.retrieved_context)}")
         if state.retrieved_context:
-            print(f"Retrieved Context Content:")
+            logger.debug("Retrieved Context Content:")
             for i, doc_content in enumerate(state.retrieved_context):
-                print(f"  Doc {i+1}: {doc_content[:200]}...") # Print first 200 chars to avoid very long outputs
+                logger.debug(f"  Doc {i+1}: {doc_content[:200]}...")
         else:
-            print("No context retrieved.")
+            logger.debug("No context retrieved.")
 
     except Exception as e:
         error_message = f"Error retrieving context from Qdrant ({collection_name}): {e}"
         # state.notes.append(error_message)
-        state.retrieved_context = [] # Output we are getting from RAG node (top K=5 chunks) OR empty (if can't retrieve properly; will schedule a call)
-        print(f"!!! RAG Retrieval Error: {error_message}") # Highlight error for debugging
+        state.retrieved_context = []
+        state.escalate_to_human = True
+        logger.error(f"RAG Retrieval Error: {error_message}")
 
-    print(f"--- End RAG Retrieval Debug ---\n")
+    logger.debug("--- End RAG Retrieval Debug ---")
     return state
 
 
@@ -638,7 +654,7 @@ def proactive_info_gathering_and_response_node(state: AgentState) -> AgentState:
             "conversation_id": "conversation_id"
         }]
         current_state.escalate_to_human = True
-        
+
         # Populate generated_notes for the fallback case
         generated_notes[0] = f"Error in proactive_info_gathering_and_response_node: {e}"
         generated_notes[1] = "Response generated as a fallback due to error."
@@ -684,7 +700,7 @@ def route_message(state: AgentState) -> str:
         return "inappropriate_flow"
     elif state.message_intent == "factual_query":
         return "rag_flow"
-    elif state.message_intent == 'immediate_response':
+    elif state.message_intent == "immediate_joining":
         return "immediate_response_flow"
     else: # Default for general_query and any other unhandled intent
         return "general_flow"

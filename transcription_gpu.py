@@ -13,6 +13,13 @@ import torch
 
 load_dotenv()
 
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# Attempt to get Hugging Face auth token from environment variable
+hf_token = os.getenv("HF_AUTH_TOKEN")
+if not hf_token:
+    logger.warning("HF_AUTH_TOKEN not set. Diarization may fail or be limited.")
+
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY").strip()
 llm = ChatOpenAI(
    model="gpt-4o-mini",
@@ -20,10 +27,17 @@ llm = ChatOpenAI(
    api_key=os.environ["OPENAI_API_KEY"]
 )
 
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# Attempt to get Hugging Face auth token from environment variable
-hf_token = os.getenv("HF_AUTH_TOKEN")
+# Load WhisperX models globally after env vars are loaded
+whisper_model_name = os.getenv("WHISPER_MODEL")
+model_device = os.getenv("MODEL_DEVICE")
+logger.info(f"Loading WhisperX model {whisper_model_name} on device {model_device}...")
+try:
+    whisper_model_instance = whisperx.load_model(whisper_model_name, device=model_device, compute_type="default")
+    align_model, align_metadata = whisperx.load_align_model(language_code="en", device=model_device)
+    diarization_pipeline = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=model_device)
+except Exception as e:
+    logger.error(f"Failed to load WhisperX models: {e}")
+    whisper_model_instance, align_model, align_metadata, diarization_pipeline = None, None, None, None
 
 def handle_transcription_request(data):
     """
@@ -35,9 +49,11 @@ def handle_transcription_request(data):
     Returns:
         dict: Response with job_id, transcription results, and summary.
     """
+    jobId = None
+    local_filename = None
     try:
         jobId = data.get("jobId")
-        fileUrl = data.get("fileUrl") 
+        fileUrl = data.get("fileUrl")
         local_filename = f"audio_{uuid.uuid4().hex}.mp3"
 
         logger.info(f"Transcription job received for jobId: {jobId}")
@@ -61,7 +77,7 @@ def handle_transcription_request(data):
         except Exception as e:
             logger.error("Error assigning speaker roles and cleaning")
             raise
-        
+
         try:
             summary = summarize_transcript(cleaned)
             logger.debug("Summary generated successfully")
@@ -86,7 +102,7 @@ def handle_transcription_request(data):
             "status": "FAILED",
             "reason": str(e)
         }
-    
+
     finally: # ADDED: Ensure local_filename is cleaned up here
         if local_filename and os.path.exists(local_filename):
             try:
@@ -97,15 +113,16 @@ def handle_transcription_request(data):
         torch.cuda.empty_cache()
 
 def download_audio(audio_url, local_filename):
+    timeout = int(os.getenv("AUDIO_DOWNLOAD_TIMEOUT", "60"))
     try:
-        with requests.get(audio_url, stream=True, timeout=20, allow_redirects=True) as r:
+        with requests.get(audio_url, stream=True, timeout=timeout, allow_redirects=True) as r:
             r.raise_for_status()
-            
+
             # Validate content-type
             content_type = r.headers.get("Content-Type", "")
             if not content_type.startswith("audio/"):
                 raise Exception(f"Invalid Content-Type: {content_type}")
-            
+
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
@@ -120,24 +137,25 @@ def download_audio(audio_url, local_filename):
         raise Exception(f"Failed to save audio file: {str(e)}")
 
 
-def process_transcription(fileUrl, local_filename): 
+def process_transcription(fileUrl, local_filename):
     try:
         download_audio(fileUrl, local_filename)
         audio = whisperx.load_audio(local_filename)
-        audio_duration_seconds = len(audio) / 16000 
+        audio_duration_seconds = len(audio) / 16000
 
-        whisper_model = os.getenv("WHISPER_MODEL")
-        model_device = os.getenv("MODEL_DEVICE")
-        model = whisperx.load_model(whisper_model, device=model_device, compute_type="default")
-        result = model.transcribe(audio, language="en")
+        if not whisper_model_instance:
+            raise Exception("WhisperX model not loaded")
+        result = whisper_model_instance.transcribe(audio, language="en")
 
         logger.debug("Whisper Transcription Stage 1 completed")
 
-        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=model_device)
-        result = whisperx.align(result["segments"], model_a, metadata, audio, device=model_device, return_char_alignments=False)
+        if not align_model or not align_metadata:
+            raise Exception("Alignment model not loaded")
+        result = whisperx.align(result["segments"], align_model, align_metadata, audio, device=model_device, return_char_alignments=False)
 
-        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=model_device)
-        diarize_segments = diarize_model(audio)
+        if not diarization_pipeline:
+            raise Exception("Diarization pipeline not loaded")
+        diarize_segments = diarization_pipeline(audio)
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
         segments = sorted(result["segments"], key=lambda x: x["start"])
@@ -163,13 +181,23 @@ def format_speaker_blocks(segments):
         content.setdefault(speaker, []).append(segment["text"])
     return {speaker: " ".join(lines) for speaker, lines in content.items()}
 
+def safe_llm_invoke(messages, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return llm.invoke(messages)
+        except Exception as e:
+            wait = 2 ** attempt
+            logger.warning(f"LLM call failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {wait}s...")
+            time.sleep(wait)
+    raise Exception("LLM call failed after maximum retries")
+
 def assign_speaker_roles(conversation):
     """
     Automatically determine Student/Counsellor roles and also clean transcript using LLM.
-    
+
     Args:
         conversation (list): List of conversation turns with speaker and text.
-        
+
     Returns:
         list: List of conversation turns with speaker and text.
     """
@@ -292,25 +320,27 @@ def assign_speaker_roles(conversation):
         ]
 
         # Generate content using ChatOpenAI (already initialized as 'llm' globally)
-        response = llm.invoke(messages)
-        
+        response = safe_llm_invoke(messages)
         response_text = response.content.strip()
-        
+
         if response_text.startswith("Unusable:"):
             return response_text
 
         # Clean the response
         json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
         json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
-        
+
         # Extract JSON object from text
         match = re.search(r'\[.*\]|\{.*\}', json_str, re.DOTALL)
-        if match:
-            json_str = match.group()
+        if not match:
+            logger.warning(f"Failed to extract JSON. Raw LLM output: {response_text[:500]}")
+            raise Exception("Invalid JSON format from LLM")
+        json_str = match.group()
         json_str = json.loads(json_str)
         return json_str
-    
+
     except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON response from LLM: {str(e)}. Raw output: {response_text[:500]}")
         raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
     except Exception as e:
         raise Exception(f"assign_speaker_roles and cleaning failed: {str(e)}")
@@ -318,10 +348,10 @@ def assign_speaker_roles(conversation):
 def summarize_transcript(conversation):
     """
     Summarize the conversation using LLM.
-    
+
     Args:
         conversation (list): List of conversation turns with speaker and text.
-        
+
     Returns:
         dict: Summary of the conversation with different keys.
     """
@@ -364,20 +394,24 @@ def summarize_transcript(conversation):
         ]
 
         # Generate content using ChatOpenAI (already initialized as 'llm' globally)
-        response = llm.invoke(messages)
-        
+        response = safe_llm_invoke(messages)
         response_text = response.content.strip()
-        
+
         # Clean the response
         json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
         json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
-        
+
         # Extract JSON object from text
         match = re.search(r'\{[\s\S]*\}', json_str)
-        if match:
-            json_str = match.group()
+        if not match:
+            logger.warning(f"Failed to extract JSON. Raw LLM output: {response_text[:500]}")
+            raise Exception("Invalid JSON format from LLM")
+        json_str = match.group()
         json_str = json.loads(json_str)
         return json_str
-        
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON response from LLM: {str(e)}. Raw output: {response_text[:500]}")
+        raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
     except Exception as e:
         raise Exception(f"summarize_transcript failed: {str(e)}")
