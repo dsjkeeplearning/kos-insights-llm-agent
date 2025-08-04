@@ -47,14 +47,15 @@ app = Flask(__name__)
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
 def is_gpu_busy():
-    """Check if GPU has active processes."""
+    """Check if GPU is actively processing (not just loaded)."""
     try:
+        # Check actual GPU utilization percentage
         output = subprocess.check_output(
-            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
             text=True
         )
-        running_pids = [line.strip() for line in output.splitlines() if line.strip()]
-        return len(running_pids) > 0
+        gpu_util = int(output.strip())
+        return gpu_util > 5  # Consider busy if >5% utilization
     except Exception:
         return False
 # executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
