@@ -173,42 +173,47 @@ def download_audio(audio_url, local_filename):
         raise Exception(f"Failed to save audio file: {str(e)}")
 
 
-def process_transcription(fileUrl, local_filename):
-    try:
-        download_audio(fileUrl, local_filename)
-        audio = whisperx.load_audio(local_filename)
-        audio_duration_seconds = len(audio) / 16000
+def process_transcription_internal(fileUrl, local_filename):
+    download_audio(fileUrl, local_filename)
+    audio = whisperx.load_audio(local_filename)
+    audio_duration_seconds = len(audio) / 16000
 
-        if not whisper_model_instance:
-            raise Exception("WhisperX model not loaded")
-        result = whisper_model_instance.transcribe(audio, language="en")
+    if not whisper_model_instance:
+        raise Exception("WhisperX model not loaded")
+    result = whisper_model_instance.transcribe(audio, language="en")
+    logger.debug("Whisper Transcription Stage 1 completed")
 
-        logger.debug("Whisper Transcription Stage 1 completed")
+    if not align_model or not align_metadata:
+        raise Exception("Alignment model not loaded")
+    result = whisperx.align(result["segments"], align_model, align_metadata, audio, device=model_device, return_char_alignments=False)
 
-        if not align_model or not align_metadata:
-            raise Exception("Alignment model not loaded")
-        result = whisperx.align(result["segments"], align_model, align_metadata, audio, device=model_device, return_char_alignments=False)
+    if not diarization_pipeline:
+        raise Exception("Diarization pipeline not loaded")
+    diarize_segments = diarization_pipeline(audio)
+    result = whisperx.assign_word_speakers(diarize_segments, result)
 
-        if not diarization_pipeline:
-            raise Exception("Diarization pipeline not loaded")
-        diarize_segments = diarization_pipeline(audio)
-        result = whisperx.assign_word_speakers(diarize_segments, result)
+    segments = sorted(result["segments"], key=lambda x: x["start"])
+    conversation = [
+        {"speaker": segment.get("speaker", "Unknown"), "text": segment.get("text", "").strip()}
+        for segment in segments if segment.get("text", "").strip()
+    ]
+    logger.debug("Speaker Diarization completed")
 
-        segments = sorted(result["segments"], key=lambda x: x["start"])
-        conversation = [
-            {"speaker": segment.get("speaker", "Unknown"), "text": segment.get("text", "").strip()}
-            for segment in segments if segment.get("text", "").strip()
-        ]
+    return {
+        "conversation": conversation,
+        "speaker_blocks": format_speaker_blocks(segments)
+    }, audio_duration_seconds
 
-        logger.debug("Speaker Diarization completed")
+def process_transcription(fileUrl, local_filename, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return process_transcription_internal(fileUrl, local_filename)
+        except Exception as e:
+            wait = 2 ** attempt
+            logger.warning(f"process_transcription failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {wait}s...")
+            time.sleep(wait)
+    raise Exception(f"Transcription process failed after maximum retries")
 
-        return {
-            "conversation": conversation,
-            "speaker_blocks": format_speaker_blocks(segments)
-        }, audio_duration_seconds
-
-    except Exception as e:
-        raise Exception(f"Transcription and Diarization failed: {str(e)}")
 
 def format_speaker_blocks(segments):
     content = {}
