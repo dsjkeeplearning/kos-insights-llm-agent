@@ -90,14 +90,17 @@ def handle_transcription_request(data):
     try:
         jobId = data.get("jobId")
         fileUrl = data.get("fileUrl")
+        student_name = data.get("student_name", "Student") # Get student name, with default
+        counsellor_name = data.get("counsellor_name", "Counsellor") # Get counsellor name, with default
+        institute_name = data.get("institute_name", "Institute") # Get institute name, with default
         local_filename = f"audio_{uuid.uuid4().hex}.mp3"
 
         logger.info(f"Transcription job received for jobId: {jobId}")
         start_total_time = time.monotonic()
         result, audio_duration_seconds = process_transcription(fileUrl, local_filename)
-
+        
         try:
-            # MODIFIED: Check if the returned value is the "Unusable" string
+            # Check if the returned value is the "Unusable" string
             cleaned_or_unusable_string = assign_speaker_roles(result["conversation"])
             if isinstance(cleaned_or_unusable_string, str) and cleaned_or_unusable_string.startswith("Unusable:"):
                 end_total_time = time.monotonic()
@@ -115,7 +118,30 @@ def handle_transcription_request(data):
             raise
 
         try:
-            summary = summarize_transcript(cleaned)
+            post_processed = post_processing(
+                cleaned, 
+                student_name, 
+                counsellor_name, 
+                institute_name
+            )
+            logger.debug("Post-processing and name correction completed successfully")
+        except Exception as e:
+            logger.error("Error during post-processing")
+            raise
+
+        try:
+            # combine consecutive speakers
+            combined = combine_consecutive_speakers(post_processed) 
+            logger.debug("Speakers combined successfully")
+        except Exception as e:
+            logger.error("Error during speaker combination")
+            raise
+        logger.info(f"Speakers combined for jobId: {jobId}.")
+
+
+        try:
+            # Pass the post-processed transcript to the summarizer
+            summary = summarize_transcript(combined) 
             logger.debug("Summary generated successfully")
         except Exception as e:
             logger.error("Error during transcript summarization")
@@ -127,7 +153,7 @@ def handle_transcription_request(data):
         return {
             "jobId": jobId,
             "status": "COMPLETED",
-            "conversation": cleaned,
+            "conversation": combined, # Return the post-processed version
             "summary": summary
         }
 
@@ -139,7 +165,7 @@ def handle_transcription_request(data):
             "reason": str(e)
         }
 
-    finally: # ADDED: Ensure local_filename is cleaned up here
+    finally:
         if local_filename and os.path.exists(local_filename):
             try:
                 os.remove(local_filename)
@@ -279,8 +305,8 @@ def assign_speaker_roles(conversation):
         **Counsellor**:
         - Represents the EdTech company or institution.
         - May say:
-        > “Are you looking for full-time or part-time?”
-        > “Let me explain the course structure...”
+            > “Are you looking for full-time or part-time?”
+            > “Let me explain the course structure...”
         - Shares fees, placements, deadlines, and tries to guide or persuade.
         - Represents the **EdTech company or University/College/Institution**.
         - Introduces themselves as a representative from the particular institution.
@@ -360,61 +386,167 @@ def assign_speaker_roles(conversation):
     except Exception as e:
         raise Exception(f"assign_speaker_roles and cleaning failed: {str(e)}")
 
-def summarize_transcript(conversation):
+def post_processing(conversation, student_name, counsellor_name, institute_name):
     """
-    Summarize the conversation using LLM.
-
-    Args:
-        conversation (list): List of conversation turns with speaker and text.
-
-    Returns:
-        dict: Summary of the conversation with different keys.
+    Cleans transcript using GPT: merges consecutive speakers, fixes names, grammar.
     """
+    # Create system and user prompts
+    system_prompt = f"""
+    You are a post-processing agent for cleaned EdTech sales transcripts. Your job is to:
 
-    system_prompt = ("""
-      You are a sales call analyst for an EdTech company. Analyze the following transcript between a Counsellor and a Student and provide a structured summary.
 
-        Focus strictly on the following:
+    Fix proper nouns based on the provided references.
+    ### Proper Noun Correction
+    You are provided with the following names:
+    - Student Name: {student_name}
+    - Counsellor Name: {counsellor_name}
+    - Institute Name: {institute_name}
+    If you encounter misspelled or mis-transcribed variants of these names (e.g., "Shrutha" → "Shruti", or "ISM", "IFM" → "IFIM", "Jackson" -> "JAGSOM"), correct them using the provided names.
+    Ensure:
+    - Preserve clarity and meaning.
+    - Do not hallucinate or invent new lines.
 
-        1. **Interest Level**  
-        Choose one: "highly interested", "moderately interested", "undecided", "low interest", or "exploring options".  
-        Explain your reasoning based on their responses, enthusiasm, and intent.
+    Return the output in the same format:
+    Output:
+      ```json
+      [
+        {{
+        "speaker": "Counsellor",
+        "text": "Hi. How can I help you?"
+        }},
+        {{
+        "speaker": "Student",
+        "text": "I have a question."
+        }},
+        {{
+        "speaker": "Counsellor",
+        "text": "Sure. Go ahead. I'm listening."
+        }}
+        ]```
 
-        2. **Questions Asked**  
-        List only the **key questions asked by the student** (ignore counsellor's questions). These might relate to programs, fees, placement, timing, etc.
-
-        3. **Objections**  
-        Mention any concerns or doubts raised by the student (e.g., cost, timing, job relevance, course credibility). If none, return `"None"`.
-
-        4. **Next Steps**  
-        Mention any action items discussed or agreed upon—such as follow-up call, document sharing, form submission, brochure, or enrollment steps.
-
-        ---
-
-        ### Output Format
-
-        Return **only** this JSON structure:
-
-        ```json
-        {
-        "interest_level": "string",
-        "questions_asked": "string",
-        "objections": "string",
-        "next_steps": "string"
-        }
-                     
-        Avoid extra commentary. Be concise, complete, and grounded in the conversation."""
-    )
+    """
 
     user_prompt = f"""
-        CLEANED CONVERSATION:
-        {conversation}
+    Here is the raw transcript to clean:
+    {conversation}
 
-        OUTPUT: 
-        """
+    output:
 
+    """
     try:
         # Create messages list for ChatOpenAI
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        response = safe_llm_invoke(messages)
+        response_text = response.content.strip()
+        
+        # Clean the response
+        json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
+        json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
+
+        # Parse full JSON array safely
+        json_data = json.loads(json_str)
+        return json_data
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse JSON response from LLM: {str(e)}")
+        raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
+    except Exception as e:
+        logger.error(f"Post-processing failed: {e}")
+        # Return the original transcript if post-processing fails
+        return conversation
+
+
+def clean_key_value(data):
+    if not isinstance(data, dict):
+        # return
+        print("Wrong datatype")
+    keys_to_remove = []
+    for key, value in data.items():
+        if isinstance(value, dict):
+            clean_key_value(value)
+            if not value:
+                keys_to_remove.append(key)
+        elif value is None or value == "" or value == "None":
+            keys_to_remove.append(key)
+    for key in keys_to_remove:
+        del data[key]
+    return data
+
+def combine_consecutive_speakers(transcript_json):
+    if not transcript_json:
+        return []
+    combined = [transcript_json[0].copy()]  # Start with first entry
+    for i in range(1, len(transcript_json)):
+        current = transcript_json[i]
+        last = combined[-1]
+        if current['speaker'] == last['speaker']:
+            # Combine text with space separation
+            last['text'] += ' ' + current['text']
+        else:
+            # Add new entry
+            combined.append(current.copy())
+    return combined
+
+def summarize_transcript(transcript_json):
+    """
+    Summarizes transcript
+    """
+    system_prompt = ("""
+      You are a sales call analyst for an EdTech company. Your task is to analyze the following transcript between a Counsellor and a Student and provide a structured, two-part summary.
+        Summary:
+        This is an extremely detailed summary for the whole call transcript between the Counsellor and the Student.
+        It will contain all the details and infomation in the transcript.
+        **Do not miss any facts or information**
+        Key Offerings:
+        Extract all the key details and information mentioned in the transcript.
+        - LEAD DETAILS - Student's name, general academic background (no specific scores), achievements, and interests. If none, state "None".
+        - ACADEMIC DETAILS - Specific scores, percentiles, or qualifications mentioned (e.g., "90% in 12th grade"). If none, state "None".
+        - PROGRAM DETAILS - Specific program features, certifications, placements, or curriculum details discussed. If none, state "None".
+        - FEE STRUCTURE - Exact costs, payment terms, and scholarship information. If none, state "None".
+        - DISCOUNTS - Any specific discounts/scholarships requested or offered. If none, state "None".
+        - APPLICATION PROCESS - Steps, requirements, or timelines mentioned for applying. If none, state "None".
+        - MISCELLANEOUS - Any other important contextual details, such as location, family background, or unique constraints. If none, state "None".
+        Interest Level:
+        Choose one: "highly interested", "moderately interested", "undecided", "low interest", or "exploring options".
+        Provide a brief, one-sentence reasoning based on their enthusiasm, questions, and expressed intent.
+        Questions Asked:
+        List the key questions asked by the student only. These are questions that reveal their priorities (e.g., about programs, fees, placement, timing). If none, state "None".
+        Objections:
+        List any specific concerns or doubts raised by the student (e.g., cost, timing, job relevance). If none, state "None".
+        Next Steps:
+        List any specific action items discussed or agreed upon. These should be concrete steps (e.g., "Counsellor to share brochure", "Student to submit form", "Schedule follow-up call").  If none, state "None".
+        ---
+        ### Output Format
+        Return only this JSON structure. If the value for any key is an empty string "" or None, **the entire key-value pair must be omitted from the output**.
+        ```json
+        {
+            "summary": "string",
+            "key_offerings" : {
+              "lead_details" : "string",
+              "academic_details" : "string",
+              "program_details" : "string",
+              "fee_structure" : "string",
+              "discounts" : "string",
+              "application_process" : "string",
+              "miscellaneous" : "string"
+            },
+            "interest_level": "string",
+            "questions_asked": "string",
+            "objections": "string",
+            "next_steps": "string"
+        }
+        ```
+        """
+    )
+    user_prompt = f"""
+    Here is the raw transcript to clean:
+    {transcript_json}
+    output:
+    """
+
+    try:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -428,17 +560,15 @@ def summarize_transcript(conversation):
         json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
         json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
 
-        # Extract JSON object from text
-        match = re.search(r'\{[\s\S]*\}', json_str)
-        if not match:
-            logger.warning(f"Failed to extract JSON. Raw LLM output: {response_text[:500]}")
-            raise Exception("Invalid JSON format from LLM")
-        json_str = match.group()
-        json_str = json.loads(json_str)
-        return json_str
+        # Parse full JSON array safely
+        try:
+            json_data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse JSON response from LLM: {str(e)}. Raw output: {response_text[:500]}")
+            raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
 
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON response from LLM: {str(e)}. Raw output: {response_text[:500]}")
-        raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
+        # Clean the key value pairs
+        json_data = clean_key_value(json_data)
+        return json_data
     except Exception as e:
         raise Exception(f"summarize_transcript failed: {str(e)}")
