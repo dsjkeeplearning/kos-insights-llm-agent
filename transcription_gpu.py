@@ -416,7 +416,7 @@ def clean_key_value(data):
             clean_key_value(value)
             if not value:
                 keys_to_remove.append(key)
-        elif value is None or value == "" or value == "None" or value == "None.":
+        elif value is None or value == "" or value == "None" or value == "None." or value == "none" or value == "none.":
             keys_to_remove.append(key)
     for key in keys_to_remove:
         del data[key]
