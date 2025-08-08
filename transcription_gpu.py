@@ -90,9 +90,9 @@ def handle_transcription_request(data):
     try:
         jobId = data.get("jobId")
         fileUrl = data.get("fileUrl")
-        student_name = data.get("student_name", "Student") # Get student name, with default
-        counsellor_name = data.get("counsellor_name", "Counsellor") # Get counsellor name, with default
-        institute_name = data.get("institute_name", "Institute") # Get institute name, with default
+        student_name = data.get("studentName", "Student") # Get student name, with default
+        counsellor_name = data.get("counsellorName", "Counsellor") # Get counsellor name, with default
+        institute_name = data.get("instituteName", "Institute") # Get institute name, with default
         local_filename = f"audio_{uuid.uuid4().hex}.mp3"
 
         logger.info(f"Transcription job received for jobId: {jobId}")
