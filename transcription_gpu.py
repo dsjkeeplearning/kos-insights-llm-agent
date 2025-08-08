@@ -136,8 +136,6 @@ def handle_transcription_request(data):
         except Exception as e:
             logger.error("Error during speaker combination")
             raise
-        logger.info(f"Speakers combined for jobId: {jobId}.")
-
 
         try:
             # Pass the post-processed transcript to the summarizer
@@ -571,4 +569,5 @@ def summarize_transcript(transcript_json):
         json_data = clean_key_value(json_data)
         return json_data
     except Exception as e:
+
         raise Exception(f"summarize_transcript failed: {str(e)}")
