@@ -101,7 +101,7 @@ def handle_transcription_request(data):
         
         try:
             # Check if the returned value is the "Unusable" string
-            cleaned_or_unusable_string = assign_speaker_roles(result["conversation"])
+            cleaned_or_unusable_string = assign_speaker_roles(result["conversation"], student_name, counsellor_name, institute_name)
             if isinstance(cleaned_or_unusable_string, str) and cleaned_or_unusable_string.startswith("Unusable:"):
                 end_total_time = time.monotonic()
                 total_processing_time = end_total_time - start_total_time
@@ -118,20 +118,8 @@ def handle_transcription_request(data):
             raise
 
         try:
-            post_processed = post_processing(
-                cleaned, 
-                student_name, 
-                counsellor_name, 
-                institute_name
-            )
-            logger.debug("Post-processing and name correction completed successfully")
-        except Exception as e:
-            logger.error("Error during post-processing")
-            raise
-
-        try:
             # combine consecutive speakers
-            combined = combine_consecutive_speakers(post_processed) 
+            combined = combine_consecutive_speakers(cleaned) 
             logger.debug("Speakers combined successfully")
         except Exception as e:
             logger.error("Error during speaker combination")
@@ -256,18 +244,49 @@ def safe_llm_invoke(messages, max_retries=3):
             time.sleep(wait)
     raise Exception("LLM call failed after maximum retries")
 
-def assign_speaker_roles(conversation):
+def extract_json_from_response(response_text):
+    """
+    Extracts a JSON object or array from a string that may contain extra text.
+    """
+    # Use a regex that specifically looks for a JSON array or object
+    # The `re.DOTALL` flag is crucial for matching across newlines
+    match = re.search(r'```(?:json)?\s*(\[.*\]|\{.*\})\s*```|(\[.*\]|\{.*\})', response_text.strip(), re.DOTALL)
+    
+    if match:
+        # Prioritize the content inside the code block if it exists
+        json_str = match.group(1) or match.group(2)
+        if json_str:
+            return json_str
+    
+    # If no match, try a more permissive extraction
+    first_brace = response_text.find('[')
+    if first_brace == -1:
+        first_brace = response_text.find('{')
+    
+    last_brace = response_text.rfind(']')
+    if last_brace == -1:
+        last_brace = response_text.rfind('}')
+        
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        return response_text[first_brace : last_brace + 1]
+        
+    raise ValueError("No valid JSON structure found in the response.")
+
+def assign_speaker_roles(conversation, student_name, counsellor_name, institute_name):
     """
     Automatically determine Student/Counsellor roles and also clean transcript using LLM.
 
     Args:
         conversation (list): List of conversation turns with speaker and text.
+        student_name (str): Name of the student.
+        counsellor_name (str): Name of the counsellor.
+        institute_name (str): Name of the institute.
 
     Returns:
         list: List of conversation turns with speaker and text.
     """
 
-    system_prompt = ("""
+    system_prompt = (f"""
         You are an expert transcript editor for EdTech sales calls. Given a raw transcript from Whisper between a Counsellor and a Student, your task is to clean it up, format it for clarity and readability, and assign correct speaker roles.
             Fix any grammatical errors, awkward phrasing, or incomplete sentences while preserving the original meaning. 
             **Important:** Do **not** make drastic changes or rewrite the content beyond necessary corrections.
@@ -292,6 +311,16 @@ def assign_speaker_roles(conversation):
         Remove fillers like:
         *um*, *uh*, *like*, *you know*, *basically*, *actually*, *so* (when filler), *right* (when filler), *I mean*
         ---
+
+        ### Proper Noun Correction
+        You are provided with the following names:
+        - {student_name} : Name of the student
+        - {counsellor_name} : Name of the counsellor
+        - {institute_name} : Name of the institute/college/university. The counsellor represents this institute.
+
+        If you encounter **misspelled or mis-transcribed variants** of these names in the transcript (e.g., "Shrutha" instead of "Shruti", or "ISM", "IFM" instead of "IFIM"), **correct them using the provided names**.
+        ---
+
         ### Speaker Labels
         Use **"Counsellor"** or **"Student"**.
             Each line must be clearly labeled as either **"Counsellor"** or **"Student"**. The input transcript might have **incorrect or misattributed** speaker assignments**, so you must:
@@ -300,7 +329,7 @@ def assign_speaker_roles(conversation):
 
         ## Role Identification Guidelines
 
-        **Counsellor**:
+        ## Counsellor
         - Represents the EdTech company or institution.
         - May say:
             > “Are you looking for full-time or part-time?”
@@ -326,21 +355,21 @@ def assign_speaker_roles(conversation):
         - May express hesitation, confusion, or interest.
 
         ## STEP 3: Output Format (ONLY if the transcript is usable):
-        - Output only a **JSON list** (i.e., an array of objects). Each object must contain:
+        - Output ONLY a **JSON list** (i.e., an array of objects). Each object must contain:
         - "speaker": One of "Counsellor" or "Student"
         - "text": The cleaned, properly punctuated transcript line.
 
             ### Example Output
             ```json
             [
-                {
+                {{
                 "speaker": "Counsellor",
                 "text": "Hello, I'm calling from ABC University regarding your course inquiry."
-                },
-                {
+                }},
+                {{
                 "speaker": "Student",
                 "text": "Hi, yes. I wanted to know more about the online MBA program.
-                }
+                }}
             ]
         """)
 
@@ -365,95 +394,16 @@ def assign_speaker_roles(conversation):
         if response_text.startswith("Unusable:"):
             return response_text
 
-        # Clean the response
-        json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
-        json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
+        try:
+            json_str = extract_json_from_response(response_text)
+            json_data = json.loads(json_str)
+            return json_data
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse JSON response from LLM: {str(e)}")
+            raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
 
-        # Extract JSON object from text
-        match = re.search(r'\[.*\]|\{.*\}', json_str, re.DOTALL)
-        if not match:
-            logger.warning(f"Failed to extract JSON. Raw LLM output: {response_text[:500]}")
-            raise Exception("Invalid JSON format from LLM")
-        json_str = match.group()
-        json_str = json.loads(json_str)
-        return json_str
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON response from LLM: {str(e)}. Raw output: {response_text[:500]}")
-        raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
     except Exception as e:
         raise Exception(f"assign_speaker_roles and cleaning failed: {str(e)}")
-
-def post_processing(conversation, student_name, counsellor_name, institute_name):
-    """
-    Cleans transcript using GPT: merges consecutive speakers, fixes names, grammar.
-    """
-    # Create system and user prompts
-    system_prompt = f"""
-    You are a post-processing agent for cleaned EdTech sales transcripts. Your job is to:
-
-
-    Fix proper nouns based on the provided references.
-    ### Proper Noun Correction
-    You are provided with the following names:
-    - Student Name: {student_name}
-    - Counsellor Name: {counsellor_name}
-    - Institute Name: {institute_name}
-    If you encounter misspelled or mis-transcribed variants of these names (e.g., "Shrutha" → "Shruti", or "ISM", "IFM" → "IFIM", "Jackson" -> "JAGSOM"), correct them using the provided names.
-    Ensure:
-    - Preserve clarity and meaning.
-    - Do not hallucinate or invent new lines.
-
-    Return the output in the same format:
-    Output:
-      ```json
-      [
-        {{
-        "speaker": "Counsellor",
-        "text": "Hi. How can I help you?"
-        }},
-        {{
-        "speaker": "Student",
-        "text": "I have a question."
-        }},
-        {{
-        "speaker": "Counsellor",
-        "text": "Sure. Go ahead. I'm listening."
-        }}
-        ]```
-
-    """
-
-    user_prompt = f"""
-    Here is the raw transcript to clean:
-    {conversation}
-
-    output:
-
-    """
-    try:
-        # Create messages list for ChatOpenAI
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        response = safe_llm_invoke(messages)
-        response_text = response.content.strip()
-        
-        # Clean the response
-        json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
-        json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
-
-        # Parse full JSON array safely
-        json_data = json.loads(json_str)
-        return json_data
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON response from LLM: {str(e)}")
-        raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
-    except Exception as e:
-        logger.error(f"Post-processing failed: {e}")
-        # Return the original transcript if post-processing fails
-        return conversation
 
 
 def clean_key_value(data):
@@ -466,7 +416,7 @@ def clean_key_value(data):
             clean_key_value(value)
             if not value:
                 keys_to_remove.append(key)
-        elif value is None or value == "" or value == "None":
+        elif value is None or value == "" or value == "None" or value == "None.":
             keys_to_remove.append(key)
     for key in keys_to_remove:
         del data[key]
@@ -517,7 +467,7 @@ def summarize_transcript(transcript_json):
         List any specific action items discussed or agreed upon. These should be concrete steps (e.g., "Counsellor to share brochure", "Student to submit form", "Schedule follow-up call").  If none, state "None".
         ---
         ### Output Format
-        Return only this JSON structure. If the value for any key is an empty string "" or None, **the entire key-value pair must be omitted from the output**.
+        Return ONLY this JSON structure:
         ```json
         {
             "summary": "string",
@@ -554,20 +504,16 @@ def summarize_transcript(transcript_json):
         response = safe_llm_invoke(messages)
         response_text = response.content.strip()
 
-        # Clean the response
-        json_str = re.sub(r'^```json\s*|\s*```$', '', response_text, flags=re.IGNORECASE)
-        json_str = re.sub(r'^```\s*|\s*```$', '', json_str, flags=re.IGNORECASE)
-
-        # Parse full JSON array safely
+       # --- Refactored JSON extraction logic ---
         try:
+            json_str = extract_json_from_response(response_text)
             json_data = json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON response from LLM: {str(e)}. Raw output: {response_text[:500]}")
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse JSON response from LLM: {str(e)}")
             raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
 
         # Clean the key value pairs
         json_data = clean_key_value(json_data)
         return json_data
     except Exception as e:
-
         raise Exception(f"summarize_transcript failed: {str(e)}")
