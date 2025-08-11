@@ -90,57 +90,76 @@ def handle_transcription_request(data):
     try:
         jobId = data.get("jobId")
         fileUrl = data.get("fileUrl")
-        student_name = data.get("studentName", "Student") # Get student name, with default
-        counsellor_name = data.get("counsellorName", "Counsellor") # Get counsellor name, with default
-        institute_name = data.get("instituteName", "Institute") # Get institute name, with default
-        local_filename = f"audio_{uuid.uuid4().hex}.mp3"
+        fileData = data.get("fileData")
+        student_name = data.get("studentName", "Student")
+        counsellor_name = data.get("counsellorName", "Counsellor")
+        institute_name = data.get("instituteName", "Institute")
 
         logger.info(f"Transcription job received for jobId: {jobId}")
         start_total_time = time.monotonic()
-        result, audio_duration_seconds = process_transcription(fileUrl, local_filename)
-        
+
+        # Step 1: Get transcription result
         try:
-            # Check if the returned value is the "Unusable" string
-            cleaned_or_unusable_string = assign_speaker_roles(result["conversation"], student_name, counsellor_name, institute_name)
+            if fileUrl:
+                local_filename = f"audio_{uuid.uuid4().hex}.mp3"
+                result, audio_duration_seconds = process_transcription(fileUrl, local_filename)
+                conversation_data = result["conversation"]
+            elif fileData:
+                audio_duration_seconds = None
+                conversation_data = fileData
+            else:
+                raise ValueError("Either 'fileUrl' or 'fileData' must be provided.")
+        except Exception as e:
+            logger.error("Error during transcription step"); raise
+
+        # Step 2: Assign speaker roles & clean
+        try:
+            cleaned_or_unusable_string = assign_speaker_roles(
+                conversation_data, student_name, counsellor_name, institute_name
+            )
             if isinstance(cleaned_or_unusable_string, str) and cleaned_or_unusable_string.startswith("Unusable:"):
                 end_total_time = time.monotonic()
-                total_processing_time = end_total_time - start_total_time
-                logger.info(f"Transcript rejected for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {total_processing_time:.2f}s")
+                logger.info(f"Transcript rejected for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {end_total_time - start_total_time:.2f}s")
                 return {
                     "jobId": jobId,
                     "status": "REJECTED",
                     "reason": cleaned_or_unusable_string
                 }
-            cleaned = cleaned_or_unusable_string # Assign to 'cleaned' if not rejected
+            cleaned = cleaned_or_unusable_string
             logger.debug("Cleaning and speaker roles assigned successfully")
         except Exception as e:
-            logger.error("Error assigning speaker roles and cleaning")
-            raise
+            logger.error("Error assigning speaker roles and cleaning"); raise
 
+        # Step 3: Combine consecutive speakers
         try:
-            # combine consecutive speakers
-            combined = combine_consecutive_speakers(cleaned) 
+            combined = combine_consecutive_speakers(cleaned)
             logger.debug("Speakers combined successfully")
         except Exception as e:
-            logger.error("Error during speaker combination")
-            raise
+            logger.error("Error during speaker combination"); raise
 
+        # Step 4: Summarize
         try:
-            # Pass the post-processed transcript to the summarizer
-            summary = summarize_transcript(combined) 
+            summary = summarize_transcript(combined)
             logger.debug("Summary generated successfully")
         except Exception as e:
-            logger.error("Error during transcript summarization")
-            raise
+            logger.error("Error during transcript summarization"); raise
+
+        try:
+            score = score_call(combined)
+            logger.debug("Score generated successfully")
+        except Exception as e:
+            logger.error("Error during transcript scoring"); raise
+
+        # Done
         end_total_time = time.monotonic()
-        total_processing_time = end_total_time - start_total_time
-        logger.info(f"Transcription job completed for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {total_processing_time:.2f}s")
+        logger.info(f"Transcription job completed for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {end_total_time - start_total_time:.2f}s")
 
         return {
             "jobId": jobId,
             "status": "COMPLETED",
-            "conversation": combined, # Return the post-processed version
-            "summary": summary
+            "conversation": combined,
+            "summary": summary,
+            "score": score
         }
 
     except Exception as e:
@@ -150,7 +169,6 @@ def handle_transcription_request(data):
             "status": "FAILED",
             "reason": str(e)
         }
-
     finally:
         if local_filename and os.path.exists(local_filename):
             try:
@@ -517,3 +535,154 @@ def summarize_transcript(transcript_json):
         return json_data
     except Exception as e:
         raise Exception(f"summarize_transcript failed: {str(e)}")
+
+
+def score_call(transcript_json):
+    """
+    Scores the call based on predefined categories and weights
+    """
+
+    # Predefined weights for each category (sum should ideally be 1.0)
+    CATEGORY_WEIGHTS = {
+        "Opening & Rapport": 0.15,
+        "Solution Alignment": 0.20,
+        "Objection Handling": 0.15,
+        "Closing Technique": 0.15,
+        "Talk-to-Listen Ratio": 0.10,
+        "Call Duration Appropriateness": 0.10,
+        "Follow-up Commitments": 0.15
+    }
+
+    system_prompt = """
+    You are an evaluator for a university marketing and sales team's call performance. Analyze the provided call transcript and score the rep's performance based on the metrics and weights below.
+    For each metric:
+    Give a score from 0-10 (0 = poor, 10 = excellent).
+    Provide a 2-3 sentence explanation referencing moments from the transcript.
+    Use the examples below as guidance.
+    Return the output in valid JSON format with no extra text.
+    Metrics
+    1. Opening & Rapport
+    Definition: Quality of the greeting, tone, professionalism, and rapport building at the start. Did the rep make the prospect comfortable and set a positive tone?
+    Examples:
+        High (9-10): “Hello, I'm Saraniya from IFIM. I see you've shown interest in our Computer Science program—how are you doing today?”
+        Low (0-3): No greeting, abrupt or robotic tone.
+    2. Program Knowledge & Value Presentation
+    Definition: How well the rep demonstrates knowledge of university programs and aligns them to the student's needs. Did they explain benefits, differentiators, and value?
+    Examples:
+        High: “Since you're aiming for a career in HR leadership, our MBA in HR offers courses in talent management and labor law, plus internships with leading companies.”
+        Low: Generic course listing without connecting to the student's interests.
+    3. Objection Handling
+    Definition: How effectively the rep listens to, acknowledges, and resolves concerns (fees, location, career prospects). Did they provide relevant data, examples, or alternatives?
+    Examples:
+        High: “I understand tuition is a concern. We offer a merit-based scholarship that could reduce fees by 50% and flexible payment plans.”
+        Low: Ignoring objections or giving vague reassurances like “Don't worry about that.”
+    4. Closing Technique
+    Definition: Did the rep confidently guide the conversation toward a next step (application, visit, payment) without being pushy?
+    Examples:
+        High: “Shall we schedule your campus tour for next Thursday?”
+        Low: Ending with “Okay, thanks for your time” without proposing action.
+    5. Talk-to-Listen Ratio
+    Definition: Balance of speaking vs. listening; ideal range is 40-60% rep talk time.
+    Examples:
+        High: Rep listens more during discovery, speaks more when explaining solutions.
+        Low: Rep dominates the conversation (>80%) or speaks too little (<20%).
+    6. Call Duration Appropriateness
+        Definition: Whether call length matched the complexity and stage (e.g., 10-20 mins for first consult).
+        Examples:
+        High: Adequate time to discuss needs, present solutions, and handle objections.
+        Low: Too short to cover topics, or unnecessarily long and repetitive.
+    7. Follow-up Commitments
+    Definition: Did the rep clearly outline next steps and confirm method/timeline for follow-up?
+    Examples:
+        High: “I'll email the brochure today and call you Friday to check in.”
+        Low: No follow-up mentioned or vague promise.
+    ** The Output should be in this JSON format ONLY. Do not add any extra text.**
+    {
+        "Opening & Rapport": {
+            "score": INT,
+            "reason": String
+        },
+        "Solution Alignment": {
+            "score": INT,
+            "reason": String
+        },
+        "Objection Handling": {
+            "score": INT,
+            "reason": String
+        },
+        "Closing Technique": {
+            "score": INT,
+            "reason": String
+        },
+        "Talk-to-Listen Ratio": {
+            "score": INT,
+            "reason": String
+        },
+        "Call Duration Appropriateness": {
+            "score": INT,
+            "reason": String
+        },
+        "Follow-up Commitments": {
+            "score": INT,
+            "reason": String
+        }
+    }
+    """
+
+    user_prompt = f"""
+    Here is the raw transcript to evaluate:
+    {transcript_json}
+    output:
+    """
+
+    try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # Get response from LLM
+        response = safe_llm_invoke(messages)
+        response_text = response.content.strip()
+
+        # Extract JSON
+        try:
+            json_str = extract_json_from_response(response_text)
+            category_scores = json.loads(json_str)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse JSON response from LLM: {str(e)}")
+            raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
+
+        # --- Prepare breakdown list & calculate call_score ---
+        breakdown = []
+        weighted_sum = 0
+
+        for category, details in category_scores.items():
+            score = int(details.get("score", 0))
+            reason = details.get("reason", "").strip()
+
+            # Normalize category name for weight matching
+            normalized_category = category.strip().lower()
+            matched_key = next((k for k in CATEGORY_WEIGHTS.keys() if k.lower() == normalized_category), None)
+
+            weight = CATEGORY_WEIGHTS.get(matched_key, 0)
+            weighted_sum += score * weight
+
+            breakdown.append({
+                "category": matched_key if matched_key else category,
+                "score": score,
+                "reason": reason
+            })
+
+        call_score = int(round(weighted_sum * 10))  # integer final score
+
+        # Sort breakdown by score (descending)
+        breakdown_sorted = sorted(breakdown, key=lambda x: x["score"], reverse=True)
+
+        return {
+            "breakdown": breakdown_sorted,
+            "call_score": call_score
+        }
+
+    except Exception as e:
+        raise Exception(f"score_call failed: {str(e)}")
