@@ -144,7 +144,7 @@ def handle_transcription_request(data):
         except Exception as e:
             logger.error("Error during transcript summarization"); raise
 
-        # Step 5: Score counsellor
+        # Step 5: Call Score
         try:
             score = score_call(combined)
             logger.debug("Score generated successfully")
@@ -562,10 +562,10 @@ def score_call(transcript_json):
     CATEGORY_WEIGHTS = {
         "Opening & Rapport": 0.15,
         "Solution Alignment": 0.20,
-        "Objection Handling": 0.15,
+        "Objection Handling": 0.20,
         "Closing Technique": 0.15,
         "Talk-to-Listen Ratio": 0.10,
-        "Call Duration Appropriateness": 0.10,
+        "Call Duration Appropriateness": 0.05,
         "Follow-up Commitments": 0.15
     }
 
