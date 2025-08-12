@@ -144,7 +144,6 @@ def handle_transcription_request(data):
         except Exception as e:
             logger.error("Error during transcript summarization"); raise
 
-        # Step 5: Call Scoring (Counsellor Specific)
         try:
             score = score_call(combined)
             logger.debug("Score generated successfully")
@@ -344,7 +343,7 @@ def assign_speaker_roles(conversation, student_name, counsellor_name, institute_
         Use **"Counsellor"** or **"Student"**.
             Each line must be clearly labeled as either **"Counsellor"** or **"Student"**. The input transcript might have **incorrect or misattributed** speaker assignments**, so you must:
             - **Carefully analyze each line** to correctly determine the speaker based on content and intent.
-            - **Reassign roles if they are incorrect**, using the following detailed context:
+            - **Reassign roles IF AND ONLY IF they are incorrect**, using the following detailed context:
 
         ## Role Identification Guidelines
 
@@ -466,31 +465,36 @@ def summarize_transcript(transcript_json):
         This is an extremely detailed summary for the whole call transcript between the Counsellor and the Student.
         It will contain all the details and infomation in the transcript.
         **Do not miss any facts or information**
-        Key Offerings:
-        Extract all the key details and information mentioned in the transcript.
-        - LEAD DETAILS - Student's name, general academic background (no specific scores), achievements, and interests. If none, state "None".
+
+        Key Details:
+        Extract all the key details and information mentioned in the transcript. 
+        - LEAD DETAILS - Student's name, general academic background (no specific scores), achievements, and interests. If none, do not return the field.
         - ACADEMIC DETAILS - Specific scores, percentiles, or qualifications mentioned (e.g., "90% in 12th grade"). If none, state "None".
         - PROGRAM DETAILS - Specific program features, certifications, placements, or curriculum details discussed. If none, state "None".
         - FEE STRUCTURE - Exact costs, payment terms, and scholarship information. If none, state "None".
         - DISCOUNTS - Any specific discounts/scholarships requested or offered. If none, state "None".
         - APPLICATION PROCESS - Steps, requirements, or timelines mentioned for applying. If none, state "None".
         - MISCELLANEOUS - Any other important contextual details, such as location, family background, or unique constraints. If none, state "None".
+
         Interest Level:
         Choose one: "highly interested", "moderately interested", "undecided", "low interest", or "exploring options".
-        Provide a brief, one-sentence reasoning based on their enthusiasm, questions, and expressed intent.
-        Questions Asked:
-        List the key questions asked by the student only. These are questions that reveal their priorities (e.g., about programs, fees, placement, timing). If none, state "None".
-        Objections:
-        List any specific concerns or doubts raised by the student (e.g., cost, timing, job relevance). If none, state "None".
+        
+        Concerns:
+        List any significant questions, doubts, hesitations or objections expressed by the student that are relevant to their decision-making.
+        Ignore trivial questions such as greetings, introductions, or queries about the counsellor/institution name.
+        Include concerns related to program details, fees, placements, career prospects, timelines, or other decision-impacting factors.
+        If none, state "None".
+
         Next Steps:
         List any specific action items discussed or agreed upon. These should be concrete steps (e.g., "Counsellor to share brochure", "Student to submit form", "Schedule follow-up call").  If none, state "None".
+        
         ---
         ### Output Format
         Return ONLY this JSON structure:
         ```json
         {
             "summary": "string",
-            "key_offerings" : {
+            "key_details" : {
               "lead_details" : "string",
               "academic_details" : "string",
               "program_details" : "string",
@@ -500,8 +504,7 @@ def summarize_transcript(transcript_json):
               "miscellaneous" : "string"
             },
             "interest_level": "string",
-            "questions_asked": "string",
-            "objections": "string",
+            "concerns": "string",
             "next_steps": "string"
         }
         ```
@@ -537,6 +540,17 @@ def summarize_transcript(transcript_json):
     except Exception as e:
         raise Exception(f"summarize_transcript failed: {str(e)}")
 
+def get_performance_rating(score):
+    if score >= 75:
+        return "Excellant"
+    elif score >= 50:
+        return "Good"
+    elif score >= 30:
+        return "Average"
+    elif score >= 10:
+        return "Below Average"
+    else:
+        return "Poor"
 
 def score_call(transcript_json):
     """
@@ -555,78 +569,146 @@ def score_call(transcript_json):
     }
 
     system_prompt = """
-    You are an evaluator for a university marketing and sales team's call performance. Analyze the provided call transcript and score the rep's performance based on the metrics and weights below.
+    You are an evaluator for a university marketing and sales team's call performance.
+    Analyze the provided call transcript and score the rep's performance based on the metrics
+    and rubrics below. The goal is to evaluate **quality of execution** regardless of whether
+    the student intends to enroll.
+
     For each metric:
-    Give a score from 0-10 (0 = poor, 10 = excellent).
-    Provide a 2-3 sentence explanation referencing moments from the transcript.
-    Use the examples below as guidance.
-    Return the output in valid JSON format with no extra text.
-    Metrics
+    - Give a score from 0-5 (0 = very poor, 5 = excellent) using the rubrics.
+    - Provide the reasoning for the score.
+    - If a scenario did not occur (e.g., no objections), score based on demonstrated ability/readiness.
+    
+    Metrics & Rubrics
+    =================
     1. Opening & Rapport
-    Definition: Quality of the greeting, tone, professionalism, and rapport building at the start. Did the rep make the prospect comfortable and set a positive tone?
-    Examples:
-        High (9-10): “Hello, I'm Saraniya from IFIM. I see you've shown interest in our Computer Science program—how are you doing today?”
-        Low (0-3): No greeting, abrupt or robotic tone.
-    2. Program Knowledge & Value Presentation
-    Definition: How well the rep demonstrates knowledge of university programs and aligns them to the student's needs. Did they explain benefits, differentiators, and value?
-    Examples:
-        High: “Since you're aiming for a career in HR leadership, our MBA in HR offers courses in talent management and labor law, plus internships with leading companies.”
-        Low: Generic course listing without connecting to the student's interests.
+    Definition: Quality of greeting, tone, professionalism, and rapport building.
+    Rubric:
+    0 = No greeting; abrupt or robotic.
+    1 = Minimal greeting; poor tone.
+    2 = Basic greeting; lacks warmth or personalization.
+    3 = Polite and clear greeting; some rapport but minimal personalization.
+    4 = Warm, confident, and builds some rapport.
+    5 = Highly engaging, personal connection, sets strong positive tone.
+
+    2. Solution Alignment
+    Definition: Demonstrates knowledge of programs and connects to prospect needs.
+    Rubric:
+    0 = No program knowledge; irrelevant details.
+    1 = Very limited program knowledge; mostly generic.
+    2 = Some program info; weak connection to needs.
+    3 = Adequate knowledge; some relevant alignment.
+    4 = Strong knowledge; aligns well to stated needs.
+    5 = Excellent depth; highly tailored and persuasive.
+
     3. Objection Handling
-    Definition: How effectively the rep listens to, acknowledges, and resolves concerns (fees, location, career prospects). Did they provide relevant data, examples, or alternatives?
-    Examples:
-        High: “I understand tuition is a concern. We offer a merit-based scholarship that could reduce fees by 50% and flexible payment plans.”
-        Low: Ignoring objections or giving vague reassurances like “Don't worry about that.”
+    Definition: Listens to, acknowledges, and resolves concerns effectively.
+    Rubric:
+    0 = Ignores objections entirely.
+    1 = Acknowledges but provides weak or irrelevant response.
+    2 = Addresses partially; leaves doubt.
+    3 = Adequate handling; provides reasonable reassurance.
+    4 = Strong handling with relevant examples or solutions.
+    5 = Masterful handling; overcomes concern fully and builds confidence.
+    Note: If no objections occur, score based on demonstrated readiness or proactive clarification.
+
     4. Closing Technique
-    Definition: Did the rep confidently guide the conversation toward a next step (application, visit, payment) without being pushy?
-    Examples:
-        High: “Shall we schedule your campus tour for next Thursday?”
-        Low: Ending with “Okay, thanks for your time” without proposing action.
+    Definition: Guides conversation toward next step without being pushy.
+    Rubric:
+    0 = Ends abruptly with no next step.
+    1 = Vague closing; no clear action.
+    2 = Suggests possible step but not confirmed.
+    3 = Clear next step but lacks strong close.
+    4 = Confident close; confirms commitment or timeline.
+    5 = Strong, natural close; locks in next step and commitment.
+
     5. Talk-to-Listen Ratio
-    Definition: Balance of speaking vs. listening; ideal range is 40-60% rep talk time.
-    Examples:
-        High: Rep listens more during discovery, speaks more when explaining solutions.
-        Low: Rep dominates the conversation (>80%) or speaks too little (<20%).
+    Definition: Was the balance between speaking and listening appropriate for the prospect's needs and engagement level? In discovery phases, more listening is expected; during explanation phases, more speaking may be appropriate. The score should reflect whether the counselor adjusted naturally to the flow of the conversation, rather than aiming for a fixed percentage.
+    Rubric:
+    0 = Very poor adjustment; rep talks excessively or barely at inappropriate times.
+    1 = Poor balance with little responsiveness to call context.
+    2 = Somewhat appropriate but occasionally mismatched talk/listen times.
+    3 = Generally appropriate; minor mismatches.
+    4 = Good adjustment; mostly follows prospect needs.
+    5 = Excellent adjustment; naturally varies talk/listen to optimize engagement.
+
     6. Call Duration Appropriateness
-        Definition: Whether call length matched the complexity and stage (e.g., 10-20 mins for first consult).
-        Examples:
-        High: Adequate time to discuss needs, present solutions, and handle objections.
-        Low: Too short to cover topics, or unnecessarily long and repetitive.
+    Definition: Whether length matched complexity and stage.
+    Rubric:
+    0 = Extremely short or unnecessarily long; major impact.
+    1 = Poor pacing; misses key topics or overly drawn out.
+    2 = Slight mismatch in timing.
+    3 = Adequate duration; minor improvement possible.
+    4 = Good pacing; all points covered.
+    5 = Perfect pacing; efficient and thorough.
+
     7. Follow-up Commitments
-    Definition: Did the rep clearly outline next steps and confirm method/timeline for follow-up?
-    Examples:
-        High: “I'll email the brochure today and call you Friday to check in.”
-        Low: No follow-up mentioned or vague promise.
+    Definition: Clear outline of next steps and confirmation of follow-up method/timeline.
+    Rubric:
+    0 = No follow-up mentioned.
+    1 = Vague promise without specifics.
+    2 = Follow-up suggested but unclear method/timeline.
+    3 = Clear follow-up but lacks confirmation.
+    4 = Strong follow-up; confirms method/timeline.
+    5 = Excellent follow-up; sets expectation and shows accountability.
+
+
+    After scoring all metrics:
+    1. Identify the **top-performing areas** (scores 4-5) and summarize them in a section called **"What Went Well"**.
+    2. Identify the **lower-performing areas** (scores 0-2, or any notable weaknesses) and summarize them in a section called **"Areas of Improvement"**.
+    3. If scores are mostly **average (around 3)**:
+    - In **What Went Well**, highlight consistency and any relatively stronger qualitative behaviors, even if all numeric scores are similar.
+    - In **Areas of Improvement**, point out opportunities to refine adequate performance into excellence.
+    4. If scores are mostly **high (4-5)**:
+    - In **What Went Well**, highlight standout skills and strengths.
+    - In **Areas of Improvement**, suggest micro-refinements, missed opportunities, or small optimizations to further improve.
+    5. If scores are mostly **low (0-2)**:
+    - In **What Went Well**, find and acknowledge any positive elements, even if small (e.g., polite greeting, attempt at explanation).
+    - In **Areas of Improvement**, focus on the most critical foundational gaps first.
+    6. Always ensure both sections are meaningful and non-empty.
+    7. For each of these sections, produce a short summary, which is 1-2 concise sentences (40-50 words) suitable for compact UI display.
+
     ** The Output should be in this JSON format ONLY. Do not add any extra text.**
     {
-        "Opening & Rapport": {
+    "breakdown": [
+        {
+            "category": "Opening & Rapport",
             "score": INT,
-            "reason": String
+            "reason": "String"
         },
-        "Solution Alignment": {
+        {
+            "category": "Solution Alignment",
             "score": INT,
-            "reason": String
+            "reason": "String"
         },
-        "Objection Handling": {
+        {
+            "category": "Objection Handling",
             "score": INT,
-            "reason": String
+            "reason": "String"
         },
-        "Closing Technique": {
+        {
+            "category": "Closing Technique",
             "score": INT,
-            "reason": String
+            "reason": "String"
         },
-        "Talk-to-Listen Ratio": {
+        {
+            "category": "Talk-to-Listen Ratio",
             "score": INT,
-            "reason": String
+            "reason": "String"
         },
-        "Call Duration Appropriateness": {
+        {
+            "category": "Call Duration Appropriateness",
             "score": INT,
-            "reason": String
+            "reason": "String"
         },
-        "Follow-up Commitments": {
+        {
+            "category": "Follow-up Commitments",
             "score": INT,
-            "reason": String
+            "reason": "String"
         }
+        ],
+        "what_went_well": "<Summary of strengths>",
+        "areas_of_improvement": "<Summary of areas for improvement>"
     }
     """
 
@@ -649,40 +731,50 @@ def score_call(transcript_json):
         # Extract JSON
         try:
             json_str = extract_json_from_response(response_text)
-            category_scores = json.loads(json_str)
+            llm_output = json.loads(json_str)
         except (ValueError, json.JSONDecodeError) as e:
             logger.warning(f"Failed to parse JSON response from LLM: {str(e)}")
             raise Exception(f"Failed to parse JSON response from LLM: {str(e)}")
 
         # --- Prepare breakdown list & calculate call_score ---
-        breakdown = []
+        breakdown_sorted = []
         weighted_sum = 0
 
-        for category, details in category_scores.items():
-            score = int(details.get("score", 0))
-            reason = details.get("reason", "").strip()
+        for item in llm_output.get("breakdown", []):
+            category = item.get("category", "").strip()
+            score = int(item.get("score", 0))
+            reason = item.get("reason", "").strip()
 
             # Normalize category name for weight matching
-            normalized_category = category.strip().lower()
+            normalized_category = category.lower()
             matched_key = next((k for k in CATEGORY_WEIGHTS.keys() if k.lower() == normalized_category), None)
 
             weight = CATEGORY_WEIGHTS.get(matched_key, 0)
             weighted_sum += score * weight
 
-            breakdown.append({
+            breakdown_sorted.append({
                 "category": matched_key if matched_key else category,
                 "score": score,
                 "reason": reason
             })
 
-        call_score = int(round(weighted_sum * 10))  # integer final score
-
         # Sort breakdown by score (descending)
-        breakdown_sorted = sorted(breakdown, key=lambda x: x["score"], reverse=True)
+        breakdown_sorted.sort(key=lambda x: x["score"], reverse=True)
+
+        # Calculate final score out of 100
+        call_score = int(round(weighted_sum * 20))
+
+        # Get the performance rating
+        performance_rating = get_performance_rating(call_score)
+        what_went_well = llm_output.get("what_went_well", "")
+        areas_of_improvement = llm_output.get("areas_of_improvement", "")
 
         return {
             "breakdown": breakdown_sorted,
-            "call_score": call_score
+            "call_score": call_score,
+            "performance_rating": performance_rating,
+            "what_went_well": what_went_well,
+            "areas_of_improvement": areas_of_improvement
         }
 
     except Exception as e:
