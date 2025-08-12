@@ -144,6 +144,7 @@ def handle_transcription_request(data):
         except Exception as e:
             logger.error("Error during transcript summarization"); raise
 
+        # Step 5: Score counsellor
         try:
             score = score_call(combined)
             logger.debug("Score generated successfully")
