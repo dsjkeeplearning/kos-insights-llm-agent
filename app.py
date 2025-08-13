@@ -2,25 +2,20 @@
 #type:ignore
 from flask import Flask, request, Response, jsonify
 import json, os, subprocess
-# from crew import run_qualification_agent, ValidationError
 import redis
 from job_queue import job_queue, get_job_status
 # from crew import run_qualification_agent, ValidationError
-import uuid
 from version import __version__
-# from crew_async import process_qualification_async
-# import concurrent.futures
 
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-# from crew_async import process_qualification_async
-# import concurrent.futures
 
 from log_cleanup_scheduler import start_log_cleanup_scheduler
-
 from transcription_gpu import get_model_status
+from lead_score_job_queue import lead_score_queue
+from lead_decay_job_queue import lead_decay_queue
 
 
 def log_gpu_info():
@@ -123,6 +118,63 @@ def transcribe():
     except Exception as e:
         return jsonify({
             "jobId": data.get("jobId", None),
+            "status": "FAILED",
+            "error": str(e)
+        }), 500
+
+@app.route("/calculate_lead_score", methods=["POST"])
+def calculate_lead_score():
+    try:
+        data = request.get_json()
+        lead_id = data.get("lead_id")
+        webhook_url = os.getenv("WEBHOOK_URL")
+
+        if lead_score_queue.full():
+            return jsonify({
+                "lead_id": lead_id,
+                "status": "REJECTED",
+                "message": "Server is busy. Try again later."
+            }), 429
+
+        lead_score_queue.put((webhook_url, data))
+
+        return jsonify({
+            "lead_id": lead_id,
+            "status": "QUEUED"
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "lead_id": data.get("lead_id", None),
+            "status": "FAILED",
+            "error": str(e)
+        }), 500
+
+
+@app.route("/calculate_decay", methods=["POST"])
+def calculate_decay():
+    try:
+        data = request.get_json()
+        lead_id = data.get("lead_id")
+        webhook_url = os.getenv("WEBHOOK_URL")
+
+        if lead_decay_queue.full():
+            return jsonify({
+                "lead_id": lead_id,
+                "status": "REJECTED",
+                "message": "Server is busy. Try again later."
+            }), 429
+
+        lead_decay_queue.put((webhook_url, data))
+
+        return jsonify({
+            "lead_id": lead_id,
+            "status": "QUEUED"
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "lead_id": data.get("lead_id", None),
             "status": "FAILED",
             "error": str(e)
         }), 500
