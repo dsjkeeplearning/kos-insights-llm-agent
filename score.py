@@ -365,68 +365,78 @@ def add_all_scores(data):
     reference_id = data.get("reference_id")
     lead_id = data.get("lead_id")
     
-    # 1. Get the parsed communication log
-    call_summary, other_entries = split_and_reduce_calls(communication_log)
-    day_summary = analyze_communication_log(other_entries)
-    signals = extract_signals_from_input(day_summary)
+    try:
+        # 1. Get the parsed communication log
+        call_summary, other_entries = split_and_reduce_calls(communication_log)
+        day_summary = analyze_communication_log(other_entries)
+        signals = extract_signals_from_input(day_summary)
 
-    # 2. Get the passive score
-    passive_score_output = get_passive_score(signals["passive_signals"])
-    passive_score = passive_score_output.get("passive_score", 0)
-    passive_summary = passive_score_output.get("passive_summary", "")
+        # 2. Get the passive score
+        passive_score_output = get_passive_score(signals["passive_signals"])
+        passive_score = passive_score_output.get("passive_score", 0)
+        passive_summary = passive_score_output.get("passive_summary", "")
 
-    # 3. Get the conversion score
-    conversion_score_output = get_conversion_score(call_summary, signals["active_conversations"])
-    conversion_score = conversion_score_output.get("conversion_score", 0)
-    conversion_summary = conversion_score_output.get("conversion_summary", "")
-    conversion_intent_level = conversion_score_output.get("conversion_intent_level", "None")
+        # 3. Get the conversion score
+        conversion_score_output = get_conversion_score(call_summary, signals["active_conversations"])
+        conversion_score = conversion_score_output.get("conversion_score", 0)
+        conversion_summary = conversion_score_output.get("conversion_summary", "")
+        conversion_intent_level = conversion_score_output.get("conversion_intent_level", "None")
 
-    # 4. Get the final active score
-    active_score_output = get_final_active_score(call_summary, signals["active_conversations"])
-    final_active_score = active_score_output.get("final_active_score", 0)
-    active_summary = active_score_output.get("active_summary", "")
+        # 4. Get the final active score
+        active_score_output = get_final_active_score(call_summary, signals["active_conversations"])
+        final_active_score = active_score_output.get("final_active_score", 0)
+        active_summary = active_score_output.get("active_summary", "")
 
-    # 5. Calculate the total score
-    total_lead_score = passive_score + conversion_score + final_active_score
-    logger.debug(f"Total lead score generated successfully")
+        # 5. Calculate the total score
+        total_lead_score = passive_score + conversion_score + final_active_score
+        logger.debug(f"Total lead score generated successfully")
 
 
-    if total_lead_score >= 80:
-        new_stage = "Hot"
-    # Transition to Warm
-    elif 40 <= total_lead_score < 80:
-        new_stage = "Warm"
-    # Transition to Cold
-    elif total_lead_score < 40:
-        new_stage = "Cold"
-    else:
-        new_stage = "Unknown"
+        if total_lead_score >= 80:
+            new_stage = "Hot"
+        # Transition to Warm
+        elif 40 <= total_lead_score < 80:
+            new_stage = "Warm"
+        # Transition to Cold
+        elif total_lead_score < 40:
+            new_stage = "Cold"
+        else:
+            new_stage = "Unknown"
 
-    breakdown = [
-        {
-            "component": "passive",
-            "score": passive_score,
-            "summary": passive_summary
-        },
-        {
-            "component": "conversion",
-            "score": conversion_score,
-            "summary": conversion_summary,
-            "intent_level": conversion_intent_level
-        },
-        {
-            "component": "active",
-            "score": final_active_score,
-            "summary": active_summary
+        breakdown = [
+            {
+                "component": "passive",
+                "score": passive_score,
+                "summary": passive_summary
+            },
+            {
+                "component": "conversion",
+                "score": conversion_score,
+                "summary": conversion_summary,
+                "intent_level": conversion_intent_level
+            },
+            {
+                "component": "active",
+                "score": final_active_score,
+                "summary": active_summary
+            }
+        ]
+
+        logger.info(f"Lead score generated successfully for lead_id: {lead_id}")
+
+        return {
+            
+            "lead_id": lead_id,
+            "status": "COMPLETED",
+            "reference_id": reference_id,
+            "lead_stage": new_stage,
+            "lead_score": total_lead_score,
+            "breakdown": breakdown
         }
-    ]
-
-    logger.info(f"Lead score generated successfully for lead_id: {lead_id}")
-
-    return {
-        "reference_id": reference_id,
-        "lead_id": lead_id,
-        "lead_stage": new_stage,
-        "lead_score": total_lead_score,
-        "breakdown": breakdown
-    }
+    except Exception as e:
+        logger.error(f"Failed to calculate lead score for lead_id: {lead_id}. Error: {str(e)}")
+        return {
+            "lead_id": lead_id,
+            "status": "FAILED",
+            "reason": str(e)
+        }

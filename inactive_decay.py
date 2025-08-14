@@ -67,13 +67,19 @@ def update_lead_status(data: dict) -> dict:
 
         return {
             "lead_id": lead_id,
+            "status": "COMPLETED",
             "reference_id": reference_id,
             "lead_score": new_score,
             "lead_stage": new_stage
         }
         
-    except ValueError as e:
-        raise ValueError(str(e))
+    except Exception as e:
+        logger.error(f"Failed to calculate lead decay for lead_id: {lead_id}. Error: {str(e)}")
+        return {
+            "lead_id": lead_id,
+            "status": "FAILED",
+            "reason": str(e)
+        }
 
 def calculate_decay(lead_data: Lead, today: date) -> tuple[int, str]:
     """Internal function to calculate decay based on lead data."""
