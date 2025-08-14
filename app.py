@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 
 from log_cleanup_scheduler import start_log_cleanup_scheduler
 from transcription_gpu import get_model_status
-from lead_score_job_queue import lead_score_queue
-from lead_decay_job_queue import lead_decay_queue
+from lead_score_job_queue import lead_score_queue, get_lead_score_job_status
+from lead_decay_job_queue import lead_decay_queue, get_lead_decay_job_status
+
 
 
 def log_gpu_info():
@@ -199,9 +200,28 @@ def status():
     """
     gpu_busy = is_gpu_busy()
     job_counts = get_job_status()
-    redis_busy = (job_counts["pending_webhooks"] > 0) or (job_counts["transcription_keys"] > 0) or (job_counts["active_jobs"] > 0)
+    lead_score_counts = get_lead_score_job_status()
+    lead_decay_counts = get_lead_decay_job_status()
+    
+    redis_busy = (
+        job_counts["pending_webhooks"] > 0 or 
+        job_counts["transcription_keys"] > 0 or 
+        job_counts["active_jobs"] > 0 or
+        lead_score_counts["pending_webhooks"] > 0 or
+        lead_score_counts["stored_results"] > 0 or
+        lead_score_counts["active_jobs"] > 0 or
+        lead_decay_counts["pending_webhooks"] > 0 or
+        lead_decay_counts["stored_results"] > 0 or
+        lead_decay_counts["active_jobs"] > 0
+    )
 
-    if gpu_busy or redis_busy or job_counts["in_memory_queue_size"] > 0:
+    queues_busy = (
+        job_counts["in_memory_queue_size"] > 0 or
+        lead_score_counts["in_memory_queue_size"] > 0 or
+        lead_decay_counts["in_memory_queue_size"] > 0
+    )
+
+    if gpu_busy or redis_busy or queues_busy:
         overall_status = "BUSY"
     else:
         overall_status = "SAFE"
@@ -213,9 +233,22 @@ def status():
         "redis_job_counts": {
             "active_jobs": job_counts["active_jobs"],
             "pending_webhooks": job_counts["pending_webhooks"],
-            "transcription_keys": job_counts["transcription_keys"]
+            "transcription_keys": job_counts["transcription_keys"],
+            "in_memory_queue_size": job_counts["in_memory_queue_size"]
         },
-        "in_memory_queue_size": job_counts["in_memory_queue_size"]
+        "lead_score_counts": {
+            "active_jobs": lead_score_counts["active_jobs"],
+            "pending_webhooks": lead_score_counts["pending_webhooks"],
+            "stored_results": lead_score_counts["stored_results"],
+            "in_memory_queue_size": lead_score_counts["in_memory_queue_size"]
+        },
+        "lead_decay_counts": {
+            "active_jobs": lead_decay_counts["active_jobs"],
+            "pending_webhooks": lead_decay_counts["pending_webhooks"],
+            "stored_results": lead_decay_counts["stored_results"],
+            "in_memory_queue_size": lead_decay_counts["in_memory_queue_size"]
+        }
+        
     }), 200
 
 
