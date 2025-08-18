@@ -57,7 +57,7 @@ def update_lead_status(data: dict) -> dict:
     try:
         lead_id = data.get("lead_id")
         reference_id = data.get("reference_id")
-        lead_score = data.get("lead_score")
+        lead_score = data.get("lead_score", 0)
         last_engagement_date = parse_date(data.get("last_engagement_date", ""))
         last_stage_change_date = parse_date(data.get("last_stage_change_date", ""))
         lead_stage = data.get("lead_stage", "Cold")
@@ -102,6 +102,9 @@ def calculate_decay(lead_data: Lead, today: date) -> tuple[int, str]:
     # Apply the exponential decay formula to the initial lead score
     decayed_score = lead_data.lead_score * math.exp(-decay_rate * days_since_engagement)
     adjusted_score = round(decayed_score)
+
+    # Prevent negative or inflated scores
+    adjusted_score = max(0, min(adjusted_score, 100))
 
     # Implement stage-specific floor scores and inactivity windows
     floor_score = FLOOR_SCORES.get(lead_data.lead_stage, 0)
