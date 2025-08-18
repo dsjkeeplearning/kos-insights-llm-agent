@@ -1,6 +1,6 @@
 #inactive_decay.py
 import math
-from datetime import date, timedelta
+from datetime import date
 from logging_config import logger
 
 # --- Configuration ---
@@ -32,6 +32,15 @@ class Lead:
         self.lead_stage = lead_stage
         self.last_stage_change_date = last_stage_change_date
 
+def parse_date(value: str) -> date:
+    """Helper to safely parse ISO date or default to today."""
+    if not value:
+        return date.today()
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return date.today()
+
 def update_lead_status(data: dict) -> dict:
     """
     Process lead data and calculate new score and stage based on decay rules.
@@ -49,9 +58,9 @@ def update_lead_status(data: dict) -> dict:
         lead_id = data.get("lead_id")
         reference_id = data.get("reference_id")
         lead_score = data.get("lead_score")
-        last_engagement_date = date.fromisoformat(data.get("last_engagement_date", ""))
-        lead_stage = data.get("lead_stage")
-        last_stage_change_date = date.fromisoformat(data.get("last_stage_change_date", ""))
+        last_engagement_date = parse_date(data.get("last_engagement_date", ""))
+        last_stage_change_date = parse_date(data.get("last_stage_change_date", ""))
+        lead_stage = data.get("lead_stage", "Cold")
 
         lead = Lead(
             lead_id=lead_id,
