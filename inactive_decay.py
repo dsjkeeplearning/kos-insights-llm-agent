@@ -1,7 +1,7 @@
 #inactive_decay.py
 import math
 from datetime import date
-from logging_config import logger
+from logging_config import inactive_decay_logger as logger
 
 # --- Configuration ---
 # The number of days a lead remains in a stage before its score can drop below the floor

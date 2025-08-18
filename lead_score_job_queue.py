@@ -1,6 +1,6 @@
 import threading, queue, requests, redis, time, json, os
 from dotenv import load_dotenv
-from logging_config import logger
+from logging_config import score_logger as logger
 from score import add_all_scores  
 
 load_dotenv()

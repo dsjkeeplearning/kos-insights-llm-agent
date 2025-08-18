@@ -66,11 +66,11 @@ if model_device and model_device.lower() == "cuda" and not cuda_available:
 logger.info(f"Loading WhisperX model '{whisper_model_name}' on device '{model_device}'...")
 try:
     whisper_model_instance = whisperx.load_model(whisper_model_name, device=model_device, compute_type="default")
-    logger.info("🟢 Whisper model loaded successfully.")
+    logger.info("Whisper model loaded successfully.")
     align_model, align_metadata = whisperx.load_align_model(language_code="en", device=model_device)
-    logger.info("🟢 Alignment model loaded successfully.")
+    logger.info("Alignment model loaded successfully.")
     diarization_pipeline = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=model_device)
-    logger.info("🟢 Diarization pipeline initialized successfully.")
+    logger.info("Diarization pipeline initialized successfully.")
 except Exception as e:
     logger.error(f"Failed to load WhisperX models: {e}")
     whisper_model_instance, align_model, align_metadata, diarization_pipeline = None, None, None, None

@@ -5,7 +5,7 @@ from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import warnings
 from preprocess import analyze_communication_log, extract_signals_from_input, split_and_reduce_calls, extract_json_from_response, safe_llm_invoke
-from logging_config import logger
+from logging_config import score_logger as logger
 
 load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)

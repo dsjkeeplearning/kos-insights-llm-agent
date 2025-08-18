@@ -1,7 +1,7 @@
 from inactive_decay import update_lead_status
 import threading, queue, requests, redis, time, json, os
 from dotenv import load_dotenv
-from logging_config import logger
+from logging_config import inactive_decay_logger as logger
 
 load_dotenv()
 
