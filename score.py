@@ -88,7 +88,7 @@ def get_passive_score(passive_signals):
     Return a score and a brief reasoning, using this format:
     {{
     "passive_score": <integer between 0-10>,
-    "passive_summary": "<short explanation of why this score was assigned>"
+    "passive_summary": "<explanation of why this score was assigned>"
     }}
 
     """
@@ -129,7 +129,7 @@ def get_conversion_score(summary_object, active_conversations):
         active_conversations (list): A list of dictionaries for each conversation event.
 
     Returns:
-        dict: A dictionary with conversion_intent_level, conversion_score, and conversion_summary.
+        dict: A dictionary with conversion_score, and conversion_summary.
     """
     
     prompt = f"""
@@ -161,21 +161,14 @@ def get_conversion_score(summary_object, active_conversations):
     ---
     ### Rules:
     - Use only ONE phrase/action — the strongest — from all inputs.
-    - Exact wording from the input in `conversion_summary` (no rephrasing).
     - Cap at **45**.
-    - If no valid signal, score = 0, intent = "None".
-    - Intent levels:
-    - 45-40 → "Strong"
-    - 30-25 → "Moderate"
-    - 5-10 → "Weak"
-    - 0 → "None"
+    - If no valid signal, score = 0.
 
     ---
     ### Output (JSON only, no extra text):
     {{
-    "conversion_intent_level": "Strong" | "Moderate" | "Weak" | "None",
     "conversion_score": 0-45,
-    "conversion_summary": "One-line rephrased summary of the strongest signal"
+    "conversion_summary": "<explanation of why this score was assigned>"
     }}
     """
     messages = [
@@ -199,7 +192,6 @@ def get_conversion_score(summary_object, active_conversations):
     except (json.JSONDecodeError, AttributeError) as e:
         logger.error(f"Error parsing conversion score JSON: {e}")
         return {
-            "conversion_intent_level": "None", 
             "conversion_score": 0, 
             "conversion_summary": "Error parsing response from LLM. Conversion signals could not be evaluated."
         }
@@ -275,7 +267,7 @@ def get_active_score(summary_object, active_conversations):
     - If quality score < 3.0 → lower decay to 0.60 regardless of date.
     ---
     ### Step 3 — Active Summary
-    Write **exactly one sentence** summarizing the overall engagement quality across all days combined.
+    Explain why the quality score was assigned.
 
     --- Output format (JSON) ---
      Return ONLY this JSON:
@@ -285,7 +277,7 @@ def get_active_score(summary_object, active_conversations):
         "2025-08-04": {{"quality_score": 7.0, "decay_factor": 0.85}},
         ...
       }},
-      "active_summary": "Lead showed urgency and asked about next steps across multiple days."
+      "active_summary": "<explanation of why this score was assigned>"
     }}
     """
     messages = [
@@ -348,6 +340,53 @@ def get_final_active_score(summary_object, active_conversations):
         "active_summary": active_summary
     }
 
+def summarize(breakdown):
+    """
+    Summarizes the score breakdown for UI display.
+
+    Args:
+        breakdown (list): A list of dictionaries containing component, score, and summary.
+
+    Returns:
+        str: A summary string.
+    """
+    
+    # Collect all summaries
+    summaries = [f"{item['component']}: {item['summary']}" for item in breakdown]
+
+
+    # Join them into one text
+    combined_summary = "\n".join(summaries)
+
+    prompt = f"""
+    Generate a concise summary from the following breakdown in 25 to 35 words. Do not mention the score in the summary.
+
+    {combined_summary}
+
+    Output Format:
+
+    {{
+        "summary": "Summary of the score breakdown."
+    }}
+    """
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant that only returns JSON."},
+        {"role": "user", "content": prompt}
+    ]
+    try:
+        response = safe_llm_invoke(messages)
+        json_str = extract_json_from_response(response.content)
+        data = json.loads(json_str)
+        logger.debug("Summary generated successfully")
+        return data
+    except (json.JSONDecodeError, AttributeError) as e:
+        logger.error(f"Error parsing summary JSON: {e}")
+
+        return {
+            "summary": "Error generating from LLM."
+            }
+
 def add_all_scores(data):
     """
     Calculates and returns a total lead score by combining various scores,
@@ -380,7 +419,6 @@ def add_all_scores(data):
         conversion_score_output = get_conversion_score(call_summary, signals["active_conversations"])
         conversion_score = conversion_score_output.get("conversion_score", 0)
         conversion_summary = conversion_score_output.get("conversion_summary", "")
-        conversion_intent_level = conversion_score_output.get("conversion_intent_level", "None")
 
         # 4. Get the final active score
         active_score_output = get_final_active_score(call_summary, signals["active_conversations"])
@@ -413,7 +451,6 @@ def add_all_scores(data):
                 "component": "conversion",
                 "score": conversion_score,
                 "summary": conversion_summary,
-                "intent_level": conversion_intent_level
             },
             {
                 "component": "active",
@@ -421,6 +458,9 @@ def add_all_scores(data):
                 "summary": active_summary
             }
         ]
+
+        final_summary = summarize(breakdown)
+        final_summary = final_summary.get("summary", "Reasoning not available.")
 
         logger.info(f"Lead score generated successfully for lead_id: {lead_id}")
 
@@ -431,7 +471,8 @@ def add_all_scores(data):
             "reference_id": reference_id,
             "lead_stage": new_stage,
             "lead_score": total_lead_score,
-            "breakdown": breakdown
+            "breakdown": breakdown,
+            "final_summary": final_summary
         }
     except Exception as e:
         logger.error(f"Failed to calculate lead score for lead_id: {lead_id}. Error: {str(e)}")

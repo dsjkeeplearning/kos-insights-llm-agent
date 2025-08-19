@@ -60,7 +60,18 @@ def update_lead_status(data: dict) -> dict:
         lead_score = data.get("lead_score", 0)
         last_engagement_date = parse_date(data.get("last_engagement_date", ""))
         last_stage_change_date = parse_date(data.get("last_stage_change_date", ""))
-        lead_stage = data.get("lead_stage", "Cold")
+        
+        # Infer stage if not provided
+        if not data.get("lead_stage"):
+            if lead_score >= 80:
+                lead_stage = "Hot"
+            elif lead_score >= 40:
+                lead_stage = "Warm"
+            else:
+                lead_stage = "Cold"
+        else:
+            lead_stage = data.get("lead_stage")
+
 
         lead = Lead(
             lead_id=lead_id,
@@ -97,7 +108,7 @@ def calculate_decay(lead_data: Lead, today: date) -> tuple[int, str]:
     days_in_lead_stage = (today - lead_data.last_stage_change_date).days
 
     # Get the decay rate based on the lead's current stage
-    decay_rate = DECAY_RATES.get(lead_data.lead_stage, DECAY_RATES["Cold"])
+    decay_rate = DECAY_RATES.get(lead_data.lead_stage, DECAY_RATES["Warm"])
 
     # Apply the exponential decay formula to the initial lead score
     decayed_score = lead_data.lead_score * math.exp(-decay_rate * days_since_engagement)
