@@ -208,7 +208,7 @@ def get_active_score(summary_object, active_conversations):
     Returns:
         dict: A dictionary with active_score and active_summary.
     """
-    if not active_conversations:
+    if not active_conversations and not summary_object:
         return {"active_score": 0, "active_summary": "No active conversation found."}
 
     prompt = f"""
