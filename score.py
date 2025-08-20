@@ -340,53 +340,6 @@ def get_final_active_score(summary_object, active_conversations):
         "active_summary": active_summary
     }
 
-def summarize(breakdown):
-    """
-    Summarizes the score breakdown for UI display.
-
-    Args:
-        breakdown (list): A list of dictionaries containing component, score, and summary.
-
-    Returns:
-        str: A summary string.
-    """
-    
-    # Collect all summaries
-    summaries = [f"{item['component']}: {item['summary']}" for item in breakdown]
-
-
-    # Join them into one text
-    combined_summary = "\n".join(summaries)
-
-    prompt = f"""
-    Generate a concise summary from the following breakdown in 25 to 35 words. Do not mention the score in the summary.
-
-    {combined_summary}
-
-    Output Format:
-
-    {{
-        "summary": "Summary of the score breakdown."
-    }}
-    """
-
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant that only returns JSON."},
-        {"role": "user", "content": prompt}
-    ]
-    try:
-        response = safe_llm_invoke(messages)
-        json_str = extract_json_from_response(response.content)
-        data = json.loads(json_str)
-        logger.debug("Summary generated successfully")
-        return data
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.error(f"Error parsing summary JSON: {e}")
-
-        return {
-            "summary": "Error generating from LLM."
-            }
-
 def add_all_scores(data):
     """
     Calculates and returns a total lead score by combining various scores,
@@ -459,9 +412,6 @@ def add_all_scores(data):
             }
         ]
 
-        final_summary = summarize(breakdown)
-        final_summary = final_summary.get("summary", "Reasoning not available.")
-
         logger.info(f"Lead score generated successfully for lead_id: {lead_id}")
 
         return {
@@ -471,8 +421,7 @@ def add_all_scores(data):
             "reference_id": reference_id,
             "lead_stage": new_stage,
             "lead_score": total_lead_score,
-            "breakdown": breakdown,
-            "final_summary": final_summary
+            "breakdown": breakdown
         }
     except Exception as e:
         logger.error(f"Failed to calculate lead score for lead_id: {lead_id}. Error: {str(e)}")
