@@ -4,7 +4,7 @@ from datetime import datetime
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import warnings
-from preprocess import analyze_communication_log, extract_signals_from_input, split_and_reduce_calls, extract_json_from_response, safe_llm_invoke
+from preprocess import analyze_communication_log, extract_signals_from_input, split_and_reduce_calls, extract_json_from_response, safe_llm_invoke, summarize_todays_communication
 from logging_config import score_logger as logger
 
 load_dotenv()
@@ -84,11 +84,18 @@ def get_passive_score(passive_signals):
     - 3-5: "Low engagement, weak intent — needs targeted outreach."
     - 0-2: "No meaningful engagement — minimal follow-up priority."
 
+    ### Summary:
+    Explanation of why the passive score was assigned.
+
     ### Output (JSON only)
     Return a score and a brief reasoning, using this format:
     {{
     "passive_score": <integer between 0-10>,
-    "passive_summary": "<explanation of why this score was assigned>"
+    "passive_summary": [
+        "<point 1>",
+        "<point 2>",
+        "... as many as needed"
+    ]
     }}
 
     """
@@ -164,11 +171,18 @@ def get_conversion_score(summary_object, active_conversations):
     - Cap at **60**.
     - If no valid signal, score = 0.
 
+    ### Summary:
+    Explanation of why the conversion score was assigned.
+
     ---
     ### Output (JSON only, no extra text):
     {{
     "conversion_score": 0-60,
-    "conversion_summary": "<explanation of why this score was assigned>"
+    "conversion_summary": [
+        "<point 1>",
+        "<point 2>",
+        "... as many as needed"
+    ]
     }}
     """
     messages = [
@@ -267,8 +281,8 @@ def get_active_score(summary_object, active_conversations):
     - If quality score < 3.0 → lower decay to 0.60 regardless of date.
     ---
     ### Step 3 — Active Summary
-    Explain why the quality score was assigned. DO NOT mention the quality score or decay factor.
-
+    Explain why the score was assigned in less than 50 words. Include the date for significant points.
+    DO NOT mention the quality score or decay factor.
 
     --- Output format (JSON) ---
      Return ONLY this JSON:
@@ -278,7 +292,11 @@ def get_active_score(summary_object, active_conversations):
         "2025-08-04": {{"quality_score": 7.0, "decay_factor": 0.85}},
         ...
       }},
-      "active_summary": "<explanation of why this score was assigned>"
+      "active_summary": [
+        "<point 1>",
+        "<point 2>",
+        "... as many as needed"
+      ]
     }}
     """
     messages = [
@@ -383,6 +401,9 @@ def add_all_scores(data):
         total_lead_score = passive_score + conversion_score + final_active_score
         logger.debug(f"Total lead score generated successfully")
 
+        # 6. Get the day-wise summary
+        day_wise = summarize_todays_communication(communication_log)
+        day_wise_summary = day_wise.get("day_wise_summary", "")
 
         if total_lead_score >= 70:
             new_stage = "Hot"
@@ -422,6 +443,7 @@ def add_all_scores(data):
             "reference_id": reference_id,
             "lead_stage": new_stage,
             "lead_score": total_lead_score,
+            "daily_score_summary": day_wise_summary,
             "breakdown": breakdown
         }
     except Exception as e:

@@ -1,6 +1,7 @@
 import os
 import json
 from langchain_openai import ChatOpenAI
+from datetime import datetime
 from dotenv import load_dotenv
 import warnings
 import re
@@ -185,3 +186,92 @@ def split_and_reduce_calls(communication_log: list) -> tuple:
         return call_entries, other_entries
     except Exception:
         return [], []
+
+def validate_timestamp(timestamp: str) -> bool:
+    """
+    Validates if a timestamp is in proper ISO 8601 format.
+    
+    Args:
+        timestamp (str): The timestamp string to validate.
+        
+    Returns:
+        bool: True if valid, False otherwise.
+    """
+    if not timestamp:
+        return False
+    try:
+        datetime.fromisoformat(timestamp)
+        return True
+    except ValueError:
+        return False
+
+def summarize_todays_communication(communication_log: list) -> dict:
+    """
+    Takes a communication log and returns a summary of today's communications only.
+    
+    Args:
+        communication_log (list): List of communication entries with timestamps
+        
+    Returns:
+        dict: Summary of today's communications
+    """
+    if not communication_log:
+        logger.warning("Empty communication log provided")
+        return {}
+
+    try:
+        # Sort by timestamp (descending) and get today's communications
+        valid_communications = [
+            entry for entry in communication_log 
+            if validate_timestamp(entry.get('timestamp', ''))
+        ]
+        
+        if not valid_communications:
+            logger.error("No valid communications found")
+            return {}
+            
+        valid_communications.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        latest_timestamp = valid_communications[0].get('timestamp', '')
+        latest_day = latest_timestamp.split('T')[0]
+        
+        todays_communications = [
+            entry for entry in valid_communications 
+            if entry.get('timestamp', '').startswith(latest_day)
+        ]
+        
+        if not todays_communications:
+            logger.warning(f"No communications found for {latest_day}")
+            return {}
+
+        # Prepare prompt for LLM
+        system_prompt = """
+        Analyze today's communication log.
+
+        Instructions:
+        - Focus only on the student's or lead's intent, interest, and engagement.
+        - Provide a short reasoning (20 words max) that justifies this.
+        - Do not repeat the communication verbatim. Instead, interpret the signals.
+        
+        Return the analysis in this JSON format:
+        {
+            "day_wise_summary": "reasoning here"
+        }
+        """
+
+        user_prompt = f"""
+        Here are the communications:
+        {todays_communications}
+        """
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        response = safe_llm_invoke(messages)
+        summary_json = extract_json_from_response(response.content)
+        return json.loads(summary_json)
+
+    except Exception as e:
+        logger.error(f"Error summarizing today's communication: {str(e)}")
+        return {"day_wise_summary": "No summary available."}
