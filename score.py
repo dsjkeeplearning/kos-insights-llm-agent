@@ -146,28 +146,28 @@ def get_conversion_score(summary_object, active_conversations):
     ---
     ### How to Score (choose the HIGHEST applicable; do NOT add):
     1. **Form submitted / completed**
-    Examples: "I have filled the form", "Form submitted", "Completed application" → **45**
+    Examples: "I have filled the form", "Form submitted", "Completed application", "Admission granted" → **60**
     2. **Will submit very soon (today/now)**
-    Examples: "Will fill tonight", "Filling now", "Will do today", "Ready to fill" → **40**
+    Examples: "Will fill tonight", "Filling now", "Will do today", "Ready to fill", "Sent my documents" → **55**
     3. **Requests application link/form**
-    Examples: "Send me the form", "Where is the link?" → **30**
+    Examples: "Send me the form", "Where is the link?" → **45**
     4. **Asks how to apply / next step**
-    Examples: "How do I apply?", "What's next to apply?" → **25**
+    Examples: "How do I apply?", "What's next to apply?" → **40**
     5. **Soft future intent** (only if profile fit & past intent shown)
-    Examples: "I'll apply soon", "Planning to apply" → **5-10**
+    Examples: "I'll apply soon", "Planning to apply", "Will confirm soon" → **20-25**
     6. **General interest only** → **0**
     7. **Objections/irrelevant talk** → **0**
 
     ---
     ### Rules:
     - Use only ONE phrase/action — the strongest — from all inputs.
-    - Cap at **45**.
+    - Cap at **60**.
     - If no valid signal, score = 0.
 
     ---
     ### Output (JSON only, no extra text):
     {{
-    "conversion_score": 0-45,
+    "conversion_score": 0-60,
     "conversion_summary": "<explanation of why this score was assigned>"
     }}
     """
@@ -267,7 +267,8 @@ def get_active_score(summary_object, active_conversations):
     - If quality score < 3.0 → lower decay to 0.60 regardless of date.
     ---
     ### Step 3 — Active Summary
-    Explain why the quality score was assigned.
+    Explain why the quality score was assigned. DO NOT mention the quality score or decay factor.
+
 
     --- Output format (JSON) ---
      Return ONLY this JSON:
@@ -298,9 +299,9 @@ def get_active_score(summary_object, active_conversations):
             }
 
 
-def compute_final_active_score(day_scores: dict, max_total_score: float = 45.0) -> dict:
+def compute_final_active_score(day_scores: dict, max_total_score: float = 30.0) -> dict:
     """
-    Compute the final normalized active score (max 40), based on daily quality score and decay.
+    Compute the final normalized active score (max 30), based on daily quality score and decay.
     """
     # Calculate raw score per day
     day_scores = {
@@ -383,10 +384,10 @@ def add_all_scores(data):
         logger.debug(f"Total lead score generated successfully")
 
 
-        if total_lead_score >= 80:
+        if total_lead_score >= 70:
             new_stage = "Hot"
         # Transition to Warm
-        elif 40 <= total_lead_score < 80:
+        elif 40 <= total_lead_score < 70:
             new_stage = "Warm"
         # Transition to Cold
         elif total_lead_score < 40:

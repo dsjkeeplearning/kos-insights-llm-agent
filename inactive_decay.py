@@ -11,7 +11,7 @@ COLD_STAGE_DAYS = WARM_STAGE_DAYS + 1
 
 # The minimum score a lead can have in each stage during its protection window
 FLOOR_SCORES = {
-    "Hot": 80,
+    "Hot": 70,
     "Warm": 40,
     "Cold": 0
 }
@@ -63,7 +63,7 @@ def update_lead_status(data: dict) -> dict:
         
         # Infer stage if not provided
         if not data.get("lead_stage"):
-            if lead_score >= 80:
+            if lead_score >= 70:
                 lead_stage = "Hot"
             elif lead_score >= 40:
                 lead_stage = "Warm"
@@ -130,10 +130,10 @@ def calculate_decay(lead_data: Lead, today: date) -> tuple[int, str]:
     new_stage = lead_data.lead_stage
     
     # Transition to Hot
-    if adjusted_score >= 80:
+    if adjusted_score >= 70:
         new_stage = "Hot"
     # Transition to Warm
-    elif 40 <= adjusted_score < 80 and days_in_lead_stage > HOT_STAGE_DAYS:
+    elif 40 <= adjusted_score < 70 and days_in_lead_stage > HOT_STAGE_DAYS:
         new_stage = "Warm"
     # Transition to Cold
     elif adjusted_score < 40 and days_in_lead_stage > WARM_STAGE_DAYS:
