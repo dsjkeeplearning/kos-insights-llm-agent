@@ -248,7 +248,8 @@ def summarize_todays_communication(communication_log: list) -> dict:
         Analyze today's communication log.
 
         Instructions:
-        - Focus only on the student's or lead's intent, interest, and engagement.
+        - Focus only on the student's or lead's intent, interest, and engagement (INBOUND COMMUNICATIONS)
+        - DO NOT CONSIDER OUTBOUND COMMUNICATIONS FOR THE REASONING.
         - Provide a short reasoning (20 words max) that justifies this.
         - Do not repeat the communication verbatim. Instead, interpret the signals.
         
