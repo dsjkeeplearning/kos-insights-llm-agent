@@ -24,7 +24,7 @@ llm = ChatOpenAI(
 )
 
 
-def get_passive_score(passive_signals):
+def get_passive_score(passive_signals, today_date):
     """
     Calls GPT-4o mini via LangChain to provide a qualitative passive engagement score.
 
@@ -41,7 +41,7 @@ def get_passive_score(passive_signals):
     You are a lead engagement evaluator assessing passive signals like link clicks, email opens, and page visits.
 
     ### Input
-    Today's date: {datetime.now().date().strftime("%Y-%m-%d")}
+    Today's date: {today_date}
     Passive signals (list of event dictionaries):
     {passive_signals}
 
@@ -126,7 +126,8 @@ def get_passive_score(passive_signals):
         }
 
 
-def get_conversion_score(summary_object, active_conversations):
+def get_conversion_score(summary_object, active_conversations, today_date):
+
     """
     Calls GPT-4o mini via LangChain to determine conversion intent from both the summary object
     and a list of active conversation events.
@@ -142,7 +143,7 @@ def get_conversion_score(summary_object, active_conversations):
     prompt = f"""
     You are a lead qualification assistant. Your job is to find the **single strongest signal** that a lead is ready to submit an application.
 
-    Date: {datetime.now().date().strftime("%Y-%m-%d")}
+    Date: {today_date}
 
     ### Data:
     **Call Summaries:**
@@ -211,7 +212,7 @@ def get_conversion_score(summary_object, active_conversations):
         }
 
 
-def get_active_score(summary_object, active_conversations):
+def get_active_score(summary_object, active_conversations, today_date):
     """
     Scores active conversations by combining summaries and calculating recency.
     
@@ -227,7 +228,7 @@ def get_active_score(summary_object, active_conversations):
 
     prompt = f"""
     You are an EdTech CRM lead conversation quality evaluator.
-    Today's date: {datetime.now().date().strftime("%Y-%m-%d")}.
+    Today's date: {today_date}
 
     ## Input Data
     - **WhatsApp & Email Logs Summary**:
@@ -345,8 +346,9 @@ def compute_final_active_score(day_scores: dict, max_total_score: float = 30.0) 
         "final_active_score": final_score
     }
 
-def get_final_active_score(summary_object, active_conversations):
-    llm_output = get_active_score(summary_object, active_conversations)
+def get_final_active_score(summary_object, active_conversations, today_date):
+
+    llm_output = get_active_score(summary_object, active_conversations, today_date)
 
     day_scores = llm_output.get("day_scores", {})
 
@@ -382,18 +384,21 @@ def add_all_scores(data):
         day_summary = analyze_communication_log(other_entries)
         signals = extract_signals_from_input(day_summary)
 
+        # today_date = datetime.now().date().strftime("%Y-%m-%d")
+        day_wise, today_date = summarize_todays_communication(communication_log)
+
         # 2. Get the passive score
-        passive_score_output = get_passive_score(signals["passive_signals"])
+        passive_score_output = get_passive_score(signals["passive_signals"], today_date)
         passive_score = passive_score_output.get("passive_score", 0)
         passive_summary = passive_score_output.get("passive_summary", "")
 
         # 3. Get the conversion score
-        conversion_score_output = get_conversion_score(call_summary, signals["active_conversations"])
+        conversion_score_output = get_conversion_score(call_summary, signals["active_conversations"], today_date)
         conversion_score = conversion_score_output.get("conversion_score", 0)
         conversion_summary = conversion_score_output.get("conversion_summary", "")
 
         # 4. Get the final active score
-        active_score_output = get_final_active_score(call_summary, signals["active_conversations"])
+        active_score_output = get_final_active_score(call_summary, signals["active_conversations"], today_date)
         final_active_score = active_score_output.get("final_active_score", 0)
         active_summary = active_score_output.get("active_summary", "")
 
@@ -402,7 +407,6 @@ def add_all_scores(data):
         logger.debug(f"Total lead score generated successfully")
 
         # 6. Get the day-wise summary
-        day_wise = summarize_todays_communication(communication_log)
         day_wise_summary = day_wise.get("day_wise_summary", "")
 
         if total_lead_score >= 70:

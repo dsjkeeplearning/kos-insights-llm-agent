@@ -270,7 +270,8 @@ def summarize_todays_communication(communication_log: list) -> dict:
 
         response = safe_llm_invoke(messages)
         summary_json = extract_json_from_response(response.content)
-        return json.loads(summary_json)
+
+        return json.loads(summary_json), latest_day
 
     except Exception as e:
         logger.error(f"Error summarizing today's communication: {str(e)}")
