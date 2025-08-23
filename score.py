@@ -169,6 +169,7 @@ def get_conversion_score(summary_object, active_conversations, today_date):
     ---
     ### Rules:
     - Use only ONE phrase/action — the strongest — from all inputs.
+    - GENERALIZATION: In case there are other phrases with a similar meaning, understand the context and assign the score accordingly.
     - Cap at **60**.
     - If no valid signal, score = 0.
 
