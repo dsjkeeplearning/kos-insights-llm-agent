@@ -6,7 +6,7 @@ from score import add_all_scores
 load_dotenv()
 
 # In-memory job queue
-lead_score_queue = queue.Queue(maxsize=200)
+lead_score_queue = queue.Queue(maxsize=300)
 
 # Redis setup
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)

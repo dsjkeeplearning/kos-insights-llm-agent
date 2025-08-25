@@ -158,12 +158,12 @@ def get_conversion_score(summary_object, active_conversations, today_date):
     2. **Will submit very soon (today/now)**
     Examples: "Will fill tonight", "Filling now", "Will do today", "Ready to fill", "Sent my documents" → **55**
     3. **Requests application link/form**
-    Examples: "Send me the form", "Where is the link?" → **45**
+    Examples: "Send me the form", "Where is the link?" → **50**
     4. **Asks how to apply / next step**
-    Examples: "How do I apply?", "What's next to apply?" → **40**
+    Examples: "How do I apply?", "What's next to apply?" → **45**
     5. **Soft future intent** (only if profile fit & past intent shown)
-    Examples: "I'll apply soon", "Planning to apply", "Will confirm soon" → **20-25**
-    6. **General interest only** → **0**
+    Examples: "I'll apply soon", "Planning to apply", "Will confirm soon" → **35-40**
+    6. **General interest only** → **20**
     7. **Objections/irrelevant talk** → **0**
 
     ---

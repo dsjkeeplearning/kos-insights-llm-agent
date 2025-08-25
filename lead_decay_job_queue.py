@@ -6,7 +6,7 @@ from logging_config import inactive_decay_logger as logger
 load_dotenv()
 
 # In-memory job queue
-lead_decay_queue = queue.Queue(maxsize=400)
+lead_decay_queue = queue.Queue(maxsize=500)
 
 # Redis setup
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
