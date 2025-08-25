@@ -29,7 +29,7 @@ def safe_llm_invoke(messages, max_retries=3):
         try:
             return llm.invoke(messages)
         except Exception as e:
-            wait = 2 ** attempt
+            wait = 4 ** attempt
             logger.warning(f"LLM call failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {wait}s...")
             time.sleep(wait)
     raise Exception("LLM call failed after maximum retries")
@@ -228,7 +228,7 @@ def summarize_todays_communication(communication_log: list) -> dict:
         
         if not valid_communications:
             logger.error("No valid communications found")
-            return {}
+            return {}, None
             
         valid_communications.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
         latest_timestamp = valid_communications[0].get('timestamp', '')
@@ -241,7 +241,7 @@ def summarize_todays_communication(communication_log: list) -> dict:
         
         if not todays_communications:
             logger.warning(f"No communications found for {latest_day}")
-            return {}
+            return {}, latest_day
 
         # Prepare prompt for LLM
         system_prompt = """
@@ -276,4 +276,4 @@ def summarize_todays_communication(communication_log: list) -> dict:
 
     except Exception as e:
         logger.error(f"Error summarizing today's communication: {str(e)}")
-        return {"day_wise_summary": "No summary available."}
+        return {"day_wise_summary": "No summary available."}, latest_day

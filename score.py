@@ -387,6 +387,9 @@ def add_all_scores(data):
 
         # today_date = datetime.now().date().strftime("%Y-%m-%d")
         day_wise, today_date = summarize_todays_communication(communication_log)
+        if today_date==None:
+            today_date = datetime.now().date().strftime("%Y-%m-%d")
+            logger.warning(f"Could not determine today's date from communication log, falling back to current date: {today_date}")
 
         # 2. Get the passive score
         passive_score_output = get_passive_score(signals["passive_signals"], today_date)
