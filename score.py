@@ -455,6 +455,7 @@ def add_all_scores(data):
         logger.error(f"Failed to calculate lead score for lead_id: {lead_id}. Error: {str(e)}")
         return {
             "lead_id": lead_id,
+            "reference_id": reference_id,
             "status": "FAILED",
             "reason": str(e)
         }
