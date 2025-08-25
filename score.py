@@ -163,8 +163,10 @@ def get_conversion_score(summary_object, active_conversations, today_date):
     Examples: "How do I apply?", "What's next to apply?" → **45**
     5. **Soft future intent** (only if profile fit & past intent shown)
     Examples: "I'll apply soon", "Planning to apply", "Will confirm soon" → **35-40**
-    6. **General interest only** → **20**
-    7. **Objections/irrelevant talk** → **0**
+    6. **Follow Up with intent**
+    Examples: "I'll follow up soon", "Planning to follow up", "Will follow up soon" → **30**
+    7. **General interest towards program** → **20**
+    8. **Objections/irrelevant talk** → **0**
 
     ---
     ### Rules:
