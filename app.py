@@ -100,11 +100,13 @@ def transcribe():
     try:
         data = request.get_json()
         job_id = data.get("jobId")
+        reference_id = data.get("referenceId")
         webhook_url = os.getenv("TRANSCRIPTION_WEBHOOK_URL")
 
         if job_queue.full():
             return jsonify({
                 "jobId": job_id,
+                "referenceId": reference_id,
                 "status": "REJECTED",
                 "message": "Server is busy. Try again later."
             }), 429
@@ -113,12 +115,14 @@ def transcribe():
 
         return jsonify({
             "jobId": job_id,
+            "referenceId": reference_id,
             "status": "QUEUED"
         }), 200
 
     except Exception as e:
         return jsonify({
             "jobId": data.get("jobId", None),
+            "referenceId": data.get("referenceId", None),
             "status": "FAILED",
             "error": str(e)
         }), 500

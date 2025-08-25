@@ -89,6 +89,7 @@ def handle_transcription_request(data):
     local_filename = None
     try:
         jobId = data.get("jobId")
+        referenceId = data.get("referenceId")
         fileUrl = data.get("fileUrl")
         fileData = data.get("fileData")
         student_name = data.get("studentName", "Student")
@@ -122,6 +123,7 @@ def handle_transcription_request(data):
                 logger.info(f"Transcript rejected for jobId: {jobId}. Audio duration: {audio_duration_seconds}s. Total processing time: {end_total_time - start_total_time:.2f}s")
                 return {
                     "jobId": jobId,
+                    "referenceId": referenceId,
                     "status": "REJECTED",
                     "reason": cleaned_or_unusable_string
                 }
@@ -157,6 +159,7 @@ def handle_transcription_request(data):
 
         return {
             "jobId": jobId,
+            "referenceId": referenceId,
             "status": "COMPLETED",
             "conversation": combined,
             "summary": summary,
@@ -167,6 +170,7 @@ def handle_transcription_request(data):
         logger.error(f"Failed to handle transcription request. Error: {str(e)}")
         return {
             "jobId": jobId,
+            "referenceId": referenceId,
             "status": "FAILED",
             "reason": str(e)
         }
