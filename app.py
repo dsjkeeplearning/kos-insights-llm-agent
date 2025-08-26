@@ -6,6 +6,8 @@ import redis
 from job_queue import job_queue, get_job_status
 # from crew import run_qualification_agent, ValidationError
 from version import __version__
+from datetime import datetime, timezone
+import requests
 
 import logging
 
@@ -16,7 +18,6 @@ from log_cleanup_scheduler import start_log_cleanup_scheduler
 from transcription_gpu import get_model_status
 from lead_score_job_queue import lead_score_queue, get_lead_score_job_status
 from lead_decay_job_queue import lead_decay_queue, get_lead_decay_job_status
-
 
 
 def log_gpu_info():
@@ -61,8 +62,28 @@ SECURITY_TOKEN = os.environ.get("SECURITY_TOKEN")
 
 if SECURITY_TOKEN is None:
     raise RuntimeError("SECURITY_TOKEN environment variable must be set")
-
 logger.info("✅ SECURITY_TOKEN found and validated")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if OPENAI_API_KEY is None:
+    raise RuntimeError("OPENAI_API_KEY environment variable must be set")
+logger.info("✅ OPENAI_API_KEY found and validated")
+
+def get_openai_request_count():
+    """Fetch today's OpenAI API request count."""
+    today = datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+
+    try:
+        resp = requests.get(f"https://api.openai.com/v1/usage?date={today}", headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        total_requests = sum(item.get("n_requests", 0) for item in data.get("data", []))
+        logger.info(f"OpenAI API request count for {today}: {total_requests}")
+        return total_requests
+    except Exception as e:
+        # fallback in case API fails
+        return -1
 
 @app.before_request
 def require_security_header():
@@ -197,16 +218,19 @@ def status():
       "redis_job_counts": {
          "active_jobs": int,
          "pending_webhooks": int,
-         "transcription_keys": int
-      },
-      "in_memory_queue_size": int
+         "transcription_keys": int,
+         "in_memory_queue_size": int
+      }, //for all 3 redis services
+      "rate_limit_safe": bool
     }
     """
     gpu_busy = is_gpu_busy()
     job_counts = get_job_status()
     lead_score_counts = get_lead_score_job_status()
     lead_decay_counts = get_lead_decay_job_status()
-    
+    total_requests = get_openai_request_count()
+    rate_limit_safe = total_requests < 9500 if total_requests >= 0 else None
+
     redis_busy = (
         job_counts["pending_webhooks"] > 0 or 
         job_counts["transcription_keys"] > 0 or 
@@ -251,11 +275,9 @@ def status():
             "pending_webhooks": lead_decay_counts["pending_webhooks"],
             "stored_results": lead_decay_counts["stored_results"],
             "in_memory_queue_size": lead_decay_counts["in_memory_queue_size"]
-        }
-        
+        },
+        "rate_limit_safe": rate_limit_safe
     }), 200
-
-
 
 
 def initialize_service():
