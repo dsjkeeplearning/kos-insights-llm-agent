@@ -4,7 +4,7 @@ from datetime import datetime
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import warnings
-from preprocess import analyze_communication_log, extract_signals_from_input, split_and_reduce_calls, extract_json_from_response, safe_llm_invoke, summarize_todays_communication
+from preprocess import analyze_communication_log, extract_signals_from_input, split_and_reduce_calls, extract_json_from_response, safe_llm_invoke
 from logging_config import score_logger as logger
 
 load_dotenv()
@@ -23,33 +23,37 @@ llm = ChatOpenAI(
    api_key=openai_key
 )
 
-
-def get_passive_score(passive_signals, today_date):
+def get_all_score(summary_object, active_conversations, passive_signals, today_date):
     """
-    Calls GPT-4o mini via LangChain to provide a qualitative passive engagement score.
-
+    Scores all lead conversations and actions.
     Args:
+        summary_object (dict): The dictionary containing the overall lead summary.
+        active_conversations (list): A list of dictionaries for each conversation event.
         passive_signals (list): A list of dictionaries for each passive signal event.
-        
+
     Returns:
-        dict: A dictionary with passive_score and passive_summary.
+        dict: A dictionary with all scores and summaries.
     """
-    if not passive_signals:
-        return {"passive_score": 0, "passive_summary": "No passive signals provided."}
+    if not active_conversations and not summary_object and not passive_signals:
+        return {
+            "conversion_score": 0,
+            "conversion_summary": ["No conversion signals found"],
+            "passive_score": 0,
+            "passive_summary": ["No passive signals found"]
+        }
 
-    prompt = f"""
+    system_prompt = f"""
+    TASK 1:
+    (PASSIVE SCORE)
+    Input is: passive_signals
+
     You are a lead engagement evaluator assessing passive signals like link clicks, email opens, and page visits.
-
-    ### Input
-    Today's date: {today_date}
-    Passive signals (list of event dictionaries):
-    {passive_signals}
 
     ### Instructions
     Use the following **Passive Engagement Evaluation Rubric** to assign a score between 0-10.
     Award points for each category, then sum them (max 10 points).
     Apply special rules before finalizing.
-    After scoring, map the final score to the **Qualitative Summary Mapping Table** exactly.
+
     #### Passive Engagement Evaluation Rubric
     **1. Recency of Engagement (0-3 points)**
     - 3: Majority of signals occurred within the last 4 days; includes at least one high-intent action (application form click).
@@ -78,142 +82,130 @@ def get_passive_score(passive_signals, today_date):
     - Email clicks: +2 points only if relevant and recent.
     - Page views: Only score if tied to high-value content (max +1 point).
 
-    #### Qualitative Summary Mapping Table
-    - 9-10: "Highly engaged, strong intent — likely to convert."
-    - 6-8: "Moderately engaged, potential interest — worth nurturing."
-    - 3-5: "Low engagement, weak intent — needs targeted outreach."
-    - 0-2: "No meaningful engagement — minimal follow-up priority."
-
-    ### Summary:
+    ### Passive Summary:
     Explanation of why the passive score was assigned.
 
-    ### Output (JSON only)
-    Return a score and a brief reasoning, using this format:
-    {{
+    OUTPUT FORMAT:
     "passive_score": <integer between 0-10>,
     "passive_summary": [
         "<point 1>",
         "<point 2>",
-        "... as many as needed"
+        "... as many as needed to justify the score"
     ]
-    }}
-
-    """
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant that only returns JSON."},
-        {"role": "user", "content": prompt}
-    ]
-
-    try:
-        response = safe_llm_invoke(messages)
-        json_str = extract_json_from_response(response.content)
-        data = json.loads(json_str)
-
-        # Force passive_score to integer
-        if "passive_score" in data:
-            try:
-                data["passive_score"] = int(round(float(data["passive_score"])))
-            except (ValueError, TypeError):
-                data["passive_score"] = 0
-        logger.debug("Passive score generated successfully")
-        return data
-
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.error(f"Error parsing passive score JSON: {e}")
-        return {
-            "passive_score": 0,
-            "passive_summary": "Error parsing response from LLM. Passive signals could not be evaluated."
-        }
-
-
-def get_conversion_score(summary_object, active_conversations, today_date):
-
-    """
-    Calls GPT-4o mini via LangChain to determine conversion intent from both the summary object
-    and a list of active conversation events.
-    
-    Args:
-        summary_object (dict): The dictionary containing the overall lead summary.
-        active_conversations (list): A list of dictionaries for each conversation event.
-
-    Returns:
-        dict: A dictionary with conversion_score, and conversion_summary.
-    """
-    
-    prompt = f"""
-    You are a lead qualification assistant. Your job is to find the **single strongest signal** that a lead is ready to submit an application.
-
-    Date: {today_date}
-
-    ### Data:
-    **Call Summaries:**
-    {summary_object}
-    **WhatsApp & Email Summaries:**
-    {active_conversations}
-
     ---
-    ### How to Score (choose the HIGHEST applicable; do NOT add):
-    1. **Form submitted / completed**
-    Examples: "I have filled the form", "Form submitted", "Completed application", "Admission granted" → **60**
-    2. **Will submit very soon (today/now)**
-    Examples: "Will fill tonight", "Filling now", "Will do today", "Ready to fill", "Sent my documents" → **55**
-    3. **Requests application link/form**
-    Examples: "Send me the form", "Where is the link?" → **50**
-    4. **Asks how to apply / next step**
-    Examples: "How do I apply?", "What's next to apply?" → **45**
-    5. **Soft future intent** (only if profile fit & past intent shown)
-    Examples: "I'll apply soon", "Planning to apply", "Will confirm soon" → **35-40**
-    6. **Follow Up with intent**
-    Examples: "I'll follow up soon", "Planning to follow up", "Will follow up soon" → **30**
-    7. **General interest towards program** → **20**
-    8. **Objections/irrelevant talk** → **0**
 
-    ---
+    TASK 2:
+    (CONVERSION SCORE)
+    Inputs are:
+    - **WhatsApp & Email Logs Summary**: active_conversations
+    - **Call Logs Summary**: summary_object
+
+    You are a lead qualification assistant. Your job is to find the **single strongest signal** from the above summaries. 
+    Go through each summary in detail and find the strongest signal. Also, go through the rules carefully before scoring.
+
+    ### How to Score (choose the HIGHEST applicable; DO NOT add):
+    1. **Action Completed (Score 60)**
+    **Intent**: The lead has definitively completed a key conversion step. The action is **done**.
+    **Examples**: "I have filled the form", "Form submitted", "Completed application", "Admission granted".
+
+    2. **Immediate Intent (Score 55)**
+    **Intent**: The lead expresses a strong and immediate commitment to act. The action is **imminent**.
+    **Examples**: "Will fill tonight", "Filling now", "Will do today", "Ready to fill", "Sent my documents".
+
+    3. **Readiness to Act (Score 50)**
+    **Intent**: The lead is ready to proceed and is asking for the means to do so. The lead is **ready to act**.
+    **Examples**: "Send me the form", "Where is the link?", "How do I get the application link?".
+
+    4. **Exploring the Path (Score 45)**
+    **Intent**: The lead is actively seeking guidance on the next steps to apply or complete a task. The lead is **exploring the path to action**.
+    **Examples**: "How do I apply?", "What's next to apply?", "assist with application process?".
+
+    5. **Soft Future Intent (Score 35-40)**
+    **Intent**: The lead shows a general interest in applying at some undefined point in the future.
+    **Examples**: "I'll apply soon", "Planning to apply", "Will confirm soon".
+
+    6. **Follow Up with Intent (Score 30)**
+    **Intent**: The lead is proactive about continuing the conversation without a clear statement of action.
+    **Examples**: "I'll follow up soon", "Planning to follow up", "Will follow up soon", "Said they will follow up".
+
+    7. **General Interest (Score 20)**
+    **Intent**: The lead is in an initial information-gathering stage.
+    **Examples**: "Requested brochure", "Asked for details", "Can you share the syllabus?".
+
+    8. **Objections/Irrelevant Talk (Score 0)**
+    **Intent**: No discernible interest or action related to the program.
+    **Examples**: Objections, spam, or off-topic conversation.
+
     ### Rules:
     - Use only ONE phrase/action — the strongest — from all inputs.
-    - GENERALIZATION: In case there are other phrases with a similar meaning, understand the context and assign the score accordingly.
+    - **GENERALIZATION**: In case there are other phrases with a similar meaning, understand the **intent** and assign the score accordingly.
+    - If the call summary mentions a next step or action item that a **counsellor or agent is to perform on behalf of the lead**, this should be interpreted as a strong signal of the lead's intent. 
+    - Regardless of whether communication is written in first-person ("I will apply") or third-person ("Student said she will apply"), interpret the keywords and intent in context and assign the correct score.
     - Cap at **60**.
     - If no valid signal, score = 0.
 
-    ### Summary:
+    ### Conversion Summary:
     Explanation of why the conversion score was assigned.
 
-    ---
-    ### Output (JSON only, no extra text):
-    {{
+    OUTPUT FORMAT:
     "conversion_score": 0-60,
     "conversion_summary": [
         "<point 1>",
         "<point 2>",
         "... as many as needed"
     ]
+
+    --- Output format (JSON) COMBINING TASKS 1 AND 2---
+    Return ONLY this JSON and NO EXTRA TEXT:
+    {{
+        "conversion_score": 0-60,
+        "conversion_summary": [
+            "<point 1>",
+            "<point 2>",
+            "... as many as needed"
+        ],
+        "passive_score": <integer between 0-10>,
+        "passive_summary": [
+            "<point 1>",
+            "<point 2>",
+            "... as many as needed to justify the score"
+        ]
     }}
     """
+
+    user_prompt = f"""
+    USE THE BELOW INFORMATION FOR ALL TASKS:
+
+    Today's date: {today_date}
+
+    FOR TASK 1, INPUT DATA:
+    passive_signals: {passive_signals}
+
+    FOR TASK 2, INPUT DATA:
+    - **WhatsApp & Email Logs Summary**:
+    active_conversations: {active_conversations}
+    - **Call Logs Summary**:
+    summary_object: {summary_object}
+    """
+
     messages = [
-        {"role": "system", "content": "You are a helpful assistant that only returns JSON."},
-        {"role": "user", "content": prompt}
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
     ]
     try:
         response = safe_llm_invoke(messages)
         json_str = extract_json_from_response(response.content)
         data = json.loads(json_str)
-
-        # Force conversion_score to integer
-        if "conversion_score" in data:
-            try:
-                data["conversion_score"] = int(round(float(data["conversion_score"])))
-            except (ValueError, TypeError):
-                data["conversion_score"] = 0
-
-        logger.debug("Conversion score generated successfully")
+        logger.debug("Passive and conversion scores generated successfully")
         return data
     except (json.JSONDecodeError, AttributeError) as e:
-        logger.error(f"Error parsing conversion score JSON: {e}")
+        logger.error(f"Error parsing passive and conversion scores JSON: {e}")
         return {
-            "conversion_score": 0, 
-            "conversion_summary": "Error parsing response from LLM. Conversion signals could not be evaluated."
-        }
-
+            "conversion_score": 0,
+            "conversion_summary": ["Error parsing response from LLM. Conversion signals could not be evaluated."],
+            "passive_score": 0,
+            "passive_summary": ["Error parsing response from LLM. Passive signals could not be evaluated."],
+            }
 
 def get_active_score(summary_object, active_conversations, today_date):
     """
@@ -224,21 +216,18 @@ def get_active_score(summary_object, active_conversations, today_date):
         active_conversations (list): A list of dictionaries for each conversation event.
 
     Returns:
-        dict: A dictionary with active_score and active_summary.
+        dict: A dictionary with active_summary and day_scores.
     """
+
     if not active_conversations and not summary_object:
-        return {"active_score": 0, "active_summary": "No active conversation found."}
+        return {
+            "active_summary": ["No active conversations found"],
+            "day_scores": {}
+        }
 
-    prompt = f"""
-    You are an EdTech CRM lead conversation quality evaluator.
-    Today's date: {today_date}
-
-    ## Input Data
-    - **WhatsApp & Email Logs Summary**:
-    {active_conversations}
-    - **Call Logs Summary**:
-    {summary_object}
+    system_prompt = f"""
     ---
+    You are an EdTech CRM lead conversation quality evaluator.
 
     ## Scoring Instructions (Strict Rubric)
     ### Step 1 — Quality Score (0-10)
@@ -274,7 +263,7 @@ def get_active_score(summary_object, active_conversations, today_date):
     **Important**:
     - Ignore explicit conversion actions (e.g., “Where do I apply?”) when scoring.
     - If no program-related engagement → score ≤ 3.0.
-    ---
+    
     ### Step 2 — Decay Factor (0-1.0)
     Base decay factor on recency:
     - 0-7 days old → 1.0
@@ -283,7 +272,7 @@ def get_active_score(summary_object, active_conversations, today_date):
     Adjustments:
     - If quality score ≥ 7.0 and date > 14 days old → upgrade decay to 0.85.
     - If quality score < 3.0 → lower decay to 0.60 regardless of date.
-    ---
+
     ### Step 3 — Active Summary
     Explain why the score was assigned in less than 50 words. Include the date for significant points.
     DO NOT mention the quality score or decay factor.
@@ -303,9 +292,20 @@ def get_active_score(summary_object, active_conversations, today_date):
       ]
     }}
     """
+
+    user_prompt = f"""
+    Today's date: {today_date}
+
+    INPUT DATA:
+    - **WhatsApp & Email Logs Summary**:
+    active_conversations: {active_conversations}
+    - **Call Logs Summary**:
+    summary_object: {summary_object}
+    """
+
     messages = [
-        {"role": "system", "content": "You are a helpful assistant that only returns JSON."},
-        {"role": "user", "content": prompt}
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
     ]
     try:
         response = safe_llm_invoke(messages)
@@ -316,10 +316,9 @@ def get_active_score(summary_object, active_conversations, today_date):
     except (json.JSONDecodeError, AttributeError) as e:
         logger.error(f"Error parsing active score JSON: {e}")
         return {
-            "active_score": 0, 
-            "active_summary": "Error parsing response from LLM. Active signals could not be evaluated."
+            "day_scores": {},
+            "active_summary": ["Error parsing response from LLM. Active signals could not be evaluated."]
             }
-
 
 def compute_final_active_score(day_scores: dict, max_total_score: float = 30.0) -> dict:
     """
@@ -349,113 +348,111 @@ def compute_final_active_score(day_scores: dict, max_total_score: float = 30.0) 
         "final_active_score": final_score
     }
 
-def get_final_active_score(summary_object, active_conversations, today_date):
+def get_final_score(summary_object, active_conversations, passive_signals, today_date):
+    try:
+        llm_output = get_active_score(summary_object, active_conversations, today_date)
+        day_scores = llm_output.get("day_scores", {})
+        scoring_result = compute_final_active_score(day_scores)
 
-    llm_output = get_active_score(summary_object, active_conversations, today_date)
+        all_output = get_all_score(summary_object, active_conversations, passive_signals, today_date)
 
-    day_scores = llm_output.get("day_scores", {})
-
-    active_summary = llm_output.get("active_summary", "No summary available.")
-
-    scoring_result = compute_final_active_score(day_scores)
-
-    return {
-        "final_active_score": scoring_result["final_active_score"],
-        "active_summary": active_summary
-    }
+        return {
+            "final_active_score": scoring_result["final_active_score"],
+            "active_summary": llm_output.get("active_summary", []),
+            "conversion_score": all_output.get("conversion_score", 0),
+            "conversion_summary": all_output.get("conversion_summary", []),
+            "passive_score": all_output.get("passive_score", 0),
+            "passive_summary": all_output.get("passive_summary", [])
+        }
+    except Exception as e:
+        logger.error(f"get_final_active_score failed: {e}")
+        return {
+            "final_active_score": 0,
+            "active_summary": ["Scoring failed"],
+            "conversion_score": 0,
+            "conversion_summary": ["Scoring failed"],
+            "passive_score": 0,
+            "passive_summary": ["Scoring failed"]
+        }
 
 def add_all_scores(data):
     """
-    Calculates and returns a total lead score by combining various scores,
-    including a compatibility score provided as a separate argument.
+    Calculates and returns a total lead score by combining various scores.
 
     Args:
-        summary (dict): A dictionary containing summary information.
-        communication_log (str): A string representing the communication log.
+        data (dict): A dictionary containing the lead data and communication logs.
 
     Returns:
         dict: A dictionary containing the individual scores and the total lead score.
     """
 
-    communication_log = data.get("communication_log")
     reference_id = data.get("reference_id")
     lead_id = data.get("lead_id")
     
     try:
-        # 1. Get the parsed communication log
+        # Get the parsed communication log
+        communication_log = data.get("communication_log", [])
+        if not communication_log:
+            logger.error("Communication log is empty")
+            return {
+                "lead_id": lead_id,
+                "reference_id": reference_id,
+                "status": "FAILED",
+                "reason": "Communication log is empty. Please provide valid communication data."
+            }
+
         call_summary, other_entries = split_and_reduce_calls(communication_log)
-        day_summary = analyze_communication_log(other_entries)
+        full_summary, today_date = analyze_communication_log(other_entries)
+        day_summary = full_summary.get("all_summary", "")
         signals = extract_signals_from_input(day_summary)
 
         # today_date = datetime.now().date().strftime("%Y-%m-%d")
-        day_wise, today_date = summarize_todays_communication(communication_log)
-        if today_date==None:
-            today_date = datetime.now().date().strftime("%Y-%m-%d")
-            logger.warning(f"Could not determine today's date from communication log, falling back to current date: {today_date}")
+        today_date = today_date or datetime.now().date().strftime("%Y-%m-%d")
 
-        # 2. Get the passive score
-        passive_score_output = get_passive_score(signals["passive_signals"], today_date)
-        passive_score = passive_score_output.get("passive_score", 0)
-        passive_summary = passive_score_output.get("passive_summary", "")
+        # Get the scores
+        active_score_output = get_final_score(
+            call_summary,
+            signals.get("active_conversations", []),
+            signals.get("passive_signals", []),
+            today_date
+        )
 
-        # 3. Get the conversion score
-        conversion_score_output = get_conversion_score(call_summary, signals["active_conversations"], today_date)
-        conversion_score = conversion_score_output.get("conversion_score", 0)
-        conversion_summary = conversion_score_output.get("conversion_summary", "")
+        # Calculate the total score
+        total_lead_score = (
+            active_score_output["final_active_score"] +
+            active_score_output["conversion_score"] +
+            active_score_output["passive_score"]
+        )
 
-        # 4. Get the final active score
-        active_score_output = get_final_active_score(call_summary, signals["active_conversations"], today_date)
-        final_active_score = active_score_output.get("final_active_score", 0)
-        active_summary = active_score_output.get("active_summary", "")
-
-        # 5. Calculate the total score
-        total_lead_score = passive_score + conversion_score + final_active_score
-        logger.debug(f"Total lead score generated successfully")
-
-        # 6. Get the day-wise summary
-        day_wise_summary = day_wise.get("day_wise_summary", "")
+        logger.debug(f"Total lead score calculated successfully")
 
         if total_lead_score >= 70:
             new_stage = "Hot"
-        # Transition to Warm
         elif 40 <= total_lead_score < 70:
             new_stage = "Warm"
-        # Transition to Cold
         elif total_lead_score < 40:
             new_stage = "Cold"
         else:
             new_stage = "Unknown"
 
         breakdown = [
-            {
-                "component": "passive",
-                "score": passive_score,
-                "summary": passive_summary
-            },
-            {
-                "component": "conversion",
-                "score": conversion_score,
-                "summary": conversion_summary,
-            },
-            {
-                "component": "active",
-                "score": final_active_score,
-                "summary": active_summary
-            }
+            {"component": "passive", "score": active_score_output["passive_score"], "summary": active_score_output["passive_summary"]},
+            {"component": "conversion", "score": active_score_output["conversion_score"], "summary": active_score_output["conversion_summary"]},
+            {"component": "active", "score": active_score_output["final_active_score"], "summary": active_score_output["active_summary"]}
         ]
 
         logger.info(f"Lead score generated successfully for lead_id: {lead_id}")
 
         return {
-            
             "lead_id": lead_id,
-            "status": "COMPLETED",
             "reference_id": reference_id,
+            "status": "COMPLETED",
             "lead_stage": new_stage,
             "lead_score": total_lead_score,
-            "daily_score_summary": day_wise_summary,
+            "daily_score_summary": full_summary.get("day_wise_summary", ""),
             "breakdown": breakdown
         }
+
     except Exception as e:
         logger.error(f"Failed to calculate lead score for lead_id: {lead_id}. Error: {str(e)}")
         return {

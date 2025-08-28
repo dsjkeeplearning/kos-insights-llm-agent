@@ -5,7 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import warnings
 import re
-from logging_config import logger
+from logging_config import score_logger as logger
 import time
 
 load_dotenv()
@@ -62,51 +62,86 @@ def extract_json_from_response(response_text):
     raise ValueError("No valid JSON structure found in the response.")
 
 def analyze_communication_log(communication_log):
-    if not communication_log:
-        return []
-    system_prompt = """
+    """
+    Analyzes the communication log to generate day-wise summaries for all communications and a concise summary for today's interactions.
+    """
+    # Sort by timestamp (descending) and get today's communications
+    valid_communications = [entry for entry in communication_log if validate_timestamp(entry.get('timestamp', ''))]
+    if not valid_communications:
+        logger.error("No valid timestamps found")
+        return {"all_summary": [], "day_wise_summary": "", "latest_day": None}
         
-        You are a CRM conversation summarizer.
+    valid_communications.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    latest_timestamp = valid_communications[0].get('timestamp', '')
+    latest_day = latest_timestamp.split('T')[0]
+    
+    todays_communications = [
+        entry for entry in valid_communications 
+        if entry.get('timestamp', '').startswith(latest_day)
+    ]
+    
+    if not todays_communications:
+        logger.warning(f"No communications found for {latest_day}")
+        return {}, latest_day
 
-        Given a chronological communication log, group the entries by date and produce one JSON per date with two main sections:
+    system_prompt = f"""You are a CRM conversation summarizer.
+    TASK 1:
+    Analyze today's communication log.
 
-        1. active_conversations — only direct WhatsApp or Email replies (ignore link clicks)
-        2. passive_signals — sub_activities like LINK_CLICK, EMAIL_OPEN, BOUNCED, etc.
+    Instructions:
+    - Focus only on the student's or lead's intent, interest, and engagement (INBOUND COMMUNICATIONS)
+    - DO NOT CONSIDER OUTBOUND COMMUNICATIONS FOR THE REASONING.
+    - Provide a short reasoning (20 words max) that justifies this.
+    - Do not repeat the communication verbatim. Instead, interpret the signals.
+    
+    OUTPUT FORMAT IS MENTIONED AT THE END.
 
-        For each section, generate:
-        - a concise summary of behavior
-        - a strength/engagement label
-        - the list of channels involved (for active only)
-        - response time for active (Immediate / Delayed / No response)
+    TASK 2:
+    Given a chronological communication log, group the entries by date and produce one JSON per date with two main sections:
 
-        For OUTBOUND messages, there is no need to generate response time and engagement level. Generate only summary and list of channels.
+    1. active_conversations — only direct WhatsApp or Email replies (ignore link clicks, email opens and emails delivered). NO OUTBOUND MESSAGES ARE CONSIDERED.
+    2. passive_signals — sub_activities like LINK_CLICK, EMAIL_OPEN, BOUNCED, etc. These are important.
 
-        If there are no active conversations for a particular day, the active_conversations section should be empty.
-        If there are no passive signals for a particular day, the passive_signals section should be empty.
+    For each section, generate:
+    - a concise summary of behavior
+    - a strength/engagement label
+    - the list of channels involved (for active only)
+    - response time for active (Immediate / Delayed / No response)
 
-        ### Output format per day:
-        ```json
-        [{
-        "date": "YYYY-MM-DD",
-        "active_conversations": {
-            "channels": ["WHATSAPP", "EMAIL"],
-            "summary": "Detailed summary of the conversation behavior",
-            "engagement_level": "High" | "Medium" | "Low",
-            "response_time": "Immediate" | "Delayed" | "No response"
-        },
-        "passive_signals": {
-            "summary": "Detailed summary of passive signals or actions",
-            "signal_strength": "High" | "Medium" | "Low"
-        }
-        }]
-        ```
+    For OUTBOUND messages, there is no need to generate response time and engagement level. Generate only summary and list of channels.
 
-        Return only a JSON array where each element represents a day's summary.
-        Even if there's only one item, return it inside an array.
-        Do not wrap it in an object.
-        """
+    If there are no active conversations for a particular day, the active_conversations section should be empty.
+    If there are no passive signals for a particular day, the passive_signals section should be empty.
+
+    Return only a JSON array where each element represents a day's summary.
+    Even if there's only one item, return it inside an array.
+    Do not wrap it in an object.
+
+    OUTPUT FORMAT FOR TASK 1 AND 2:
+    
+    ```json
+    {{
+    "all_summary":[{{
+                "date": "YYYY-MM-DD",
+                "active_conversations": {{
+                    "channels": ["WHATSAPP", "EMAIL"], //or any other if present
+                    "summary": "Detailed summary of the conversation behavior",
+                    "engagement_level": "High" | "Medium" | "Low",
+                    "response_time": "Immediate" | "Delayed" | "No response"
+                    }},
+                "passive_signals": {{
+                    "summary": "Detailed summary of passive signals or actions",
+                    "signal_strength": "High" | "Medium" | "Low"
+                }}
+    }}],
+    "day_wise_summary": "reasoning here"}}
+    ```    
+    """
     user_prompt = f"""
-    Here is the communication log:
+    Here is today's communication log for TASK 1:
+    {todays_communications}
+
+    Here is the chronological communication log for TASK 2:
     {communication_log}
     """
 
@@ -119,11 +154,10 @@ def analyze_communication_log(communication_log):
         response = safe_llm_invoke(messages)
         json_str = extract_json_from_response(response.content)
         json_str = json.loads(json_str)
-        return json_str
+        return json_str, latest_day
     except (json.JSONDecodeError, AttributeError) as e:
-        print(f"Error parsing summary JSON: {e}")
-        return {"error": "Failed to parse summary", "reason": str(e)}
-
+        logger.error(f"Failed to analyze communication log: {e}")
+        return {"all_summary": [], "day_wise_summary": "", "latest_day": latest_day}
 
 def extract_signals_from_input(daily_activities: list):
     """
@@ -150,9 +184,6 @@ def extract_signals_from_input(daily_activities: list):
                 passive_signals_data = activity["passive_signals"]
                 passive_signals_data["date"] = activity_date
                 passive_signals.append(passive_signals_data)
-        
-        # The summary object is a separate piece of information.
-        # We will pass it as is to the function that needs it.
         
         return {
             "active_conversations": active_conversations,
@@ -204,76 +235,3 @@ def validate_timestamp(timestamp: str) -> bool:
         return True
     except ValueError:
         return False
-
-def summarize_todays_communication(communication_log: list) -> dict:
-    """
-    Takes a communication log and returns a summary of today's communications only.
-    
-    Args:
-        communication_log (list): List of communication entries with timestamps
-        
-    Returns:
-        dict: Summary of today's communications
-    """
-    if not communication_log:
-        logger.warning("Empty communication log provided")
-        return {}
-
-    try:
-        # Sort by timestamp (descending) and get today's communications
-        valid_communications = [
-            entry for entry in communication_log 
-            if validate_timestamp(entry.get('timestamp', ''))
-        ]
-        
-        if not valid_communications:
-            logger.error("No valid communications found")
-            return {}, None
-            
-        valid_communications.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-        latest_timestamp = valid_communications[0].get('timestamp', '')
-        latest_day = latest_timestamp.split('T')[0]
-        
-        todays_communications = [
-            entry for entry in valid_communications 
-            if entry.get('timestamp', '').startswith(latest_day)
-        ]
-        
-        if not todays_communications:
-            logger.warning(f"No communications found for {latest_day}")
-            return {}, latest_day
-
-        # Prepare prompt for LLM
-        system_prompt = """
-        Analyze today's communication log.
-
-        Instructions:
-        - Focus only on the student's or lead's intent, interest, and engagement (INBOUND COMMUNICATIONS)
-        - DO NOT CONSIDER OUTBOUND COMMUNICATIONS FOR THE REASONING.
-        - Provide a short reasoning (20 words max) that justifies this.
-        - Do not repeat the communication verbatim. Instead, interpret the signals.
-        
-        Return the analysis in this JSON format:
-        {
-            "day_wise_summary": "reasoning here"
-        }
-        """
-
-        user_prompt = f"""
-        Here are the communications:
-        {todays_communications}
-        """
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-
-        response = safe_llm_invoke(messages)
-        summary_json = extract_json_from_response(response.content)
-
-        return json.loads(summary_json), latest_day
-
-    except Exception as e:
-        logger.error(f"Error summarizing today's communication: {str(e)}")
-        return {"day_wise_summary": "No summary available."}, latest_day
